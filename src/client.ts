@@ -8,7 +8,8 @@
 
 import type {
   AccountsChangedEventData, Balance, BdxEvent, BdxMethod, BeldexProvider,
-  ConnectEventData, ConnectResult, GetAddressResult, GetBalanceResult,
+  ConnectEventData, ConnectProof, ConnectResult, ConnectWithProofResult,
+  GetAddressResult, GetBalanceResult,
   GetNetworkResult, GetStateResult, ResolveBnsResult, SendTransactionParams,
   SendTransactionResult, SignMessageResult, VerifyMessageParams,
   VerifyMessageResult, WalletState
@@ -20,6 +21,21 @@ import { checkAddress } from './address.js'
 const APPROVAL_METHODS: ReadonlySet<BdxMethod> = new Set([
   'bdx_connect', 'bdx_sendTransaction', 'bdx_signMessage'
 ])
+
+/** The challenge signed by `connectWithProof()`: `<address>:<nonce>:<timestamp>`.
+ *  Exported so verifiers can rebuild it from the parts they stored. */
+export function buildAuthChallenge(address: string, nonce: string, timestamp: number): string {
+  return `${address}:${nonce}:${timestamp}`
+}
+
+/** 16 random bytes as 32 hex chars (web crypto — browsers and Node ≥18). */
+function randomNonceHex(): string {
+  const b = new Uint8Array(16)
+  globalThis.crypto.getRandomValues(b)
+  let s = ''
+  for (const x of b) s += x.toString(16).padStart(2, '0')
+  return s
+}
 
 export interface BeldexWeb3Options {
   /** Timeout for auto-answered methods. Default 30 000 ms. */
@@ -86,6 +102,41 @@ export class BeldexWeb3 {
     const r = await this.request<ConnectResult>('bdx_connect')
     this.cachedAddress = r.address
     return r
+  }
+
+  /**
+   * Connect, then immediately ask the wallet to sign an ownership challenge of
+   * `<address>:<nonce>:<timestamp>` (two approvals: connect, then signature).
+   *
+   * - `required: true` (default): connection and proof are all-or-nothing — a
+   *   rejected signature disconnects again and rethrows the 4001.
+   * - `required: false`: a rejected signature leaves the connection standing
+   *   and resolves with `proof: null`.
+   *
+   * Verify server-side with `bdx_verifyMessage` (or CLI `verify_value`) and
+   * check the address, nonce freshness, and timestamp window yourself — the
+   * challenge contains no origin binding, so treat nonce+timestamp as your
+   * replay protection.
+   */
+  async connectWithProof(opts: { required?: boolean } = {}): Promise<ConnectWithProofResult> {
+    const required = opts.required ?? true
+    const { address, network } = await this.connect()
+    const nonce = randomNonceHex()
+    const timestamp = Date.now()
+    const message = buildAuthChallenge(address, nonce, timestamp)
+    try {
+      const s = await this.signMessage(message)
+      const proof: ConnectProof = {
+        message, signature: s.signature, address: s.address, nonce, timestamp
+      }
+      return { address, network, proof }
+    } catch (e) {
+      if (BdxRpcError.isUserRejection(e) && !required) {
+        return { address, network, proof: null }
+      }
+      if (required) await this.disconnect().catch(() => {})
+      throw e
+    }
   }
 
   /** Revoke this origin's grant. */
@@ -165,10 +216,21 @@ export class BeldexWeb3 {
     })
   }
 
-  /** Sign a UTF-8 message with the wallet's key (user approves). */
+  /**
+   * Sign a UTF-8 message with the wallet's spend key (user approves in the
+   * wallet's window). Returns a `"SigV1…"` signature verifiable by
+   * `verifyMessage()`, `beldex-wallet-cli`, and the explorer (PROTOCOL.md §4.6).
+   * The reference wallet caps messages at 512 characters.
+   */
   async signMessage(message: string): Promise<SignMessageResult> {
     if (typeof message !== 'string' || message.length === 0) {
       throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'message must be a non-empty string')
+    }
+    // Mirrors the wallet (§4.6): text only — a message must not be able to hide
+    // its content behind newlines/escapes in the approval card.
+    // eslint-disable-next-line no-control-regex
+    if (/[\x00-\x1f\x7f]/.test(message)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'message must not contain control characters')
     }
     return this.request<SignMessageResult>('bdx_signMessage', { message })
   }

@@ -53,6 +53,32 @@ bdx.on('balanceChanged', d => {/* refresh UI */})
 bdx.on('disconnect', () => {/* show connect button */})
 ```
 
+### Message signing
+
+Ask the wallet to sign a plain-text message with the account **spend key** (the user approves in the wallet; `"SigV1…"` encoding, verifiable by `beldex-wallet-cli` and the explorer — see PROTOCOL.md §4.6):
+
+```ts
+const { signature, address } = await bdx.signMessage('I own this address — challenge #42')
+// → { signature: 'SigV1…', address: 'bx…' }
+
+// Verification is public — no connection or approval needed:
+const valid = await bdx.verifyMessage({ message, address, signature })
+```
+
+Constraints (enforced client-side before the request leaves the page, and again by the wallet): non-empty plain text only — no control characters (`\n` included) — and the reference wallet caps messages at 512 characters.
+
+**Ownership proof on connect.** `connectWithProof()` connects and immediately has the wallet sign a `<address>:<nonce>:<timestamp>` challenge (two approvals back-to-back). All-or-nothing by default: if the user declines the signature, the fresh connection is revoked again and the 4001 is rethrown:
+
+```ts
+const { address, network, proof } = await bdx.connectWithProof()
+// proof: { message, signature, address, nonce, timestamp }
+
+// lenient variant — declined signature keeps the connection, proof is null:
+await bdx.connectWithProof({ required: false })
+```
+
+Verify server-side by rebuilding the challenge with the exported `buildAuthChallenge(address, nonce, timestamp)` and checking it via `bdx_verifyMessage` (or CLI `verify_value`). The challenge carries no origin binding — enforce nonce single-use and a timestamp window on your backend for replay protection.
+
 ### BNS names
 
 `sendTransaction` accepts only concrete addresses — resolve names first so users approve exactly what gets paid:
@@ -95,7 +121,7 @@ Beldex is a private-by-default (Monero-family) chain, so this SDK is payments-or
 
 - Balances aren't public — `getBalance()` works only after the user approves `connect()`, and is answered by the wallet itself. Your app never sees the view key.
 - Every `sendTransaction`/`signMessage` requires fresh in-wallet approval. There are no allowances or auto-approvals.
-- `signMessage`/`verifyMessage` are **reserved but not yet implemented** by the wallet (its WASM core exposes no signing primitives — see `docs/PHASE4_CAPABILITY_REPORT.md`); calls currently fail with `-32601`.
+- `verifyMessage` is the one keyless call: pure signature arithmetic, public, no grant.
 - Before `connect()`, a page can only learn that a wallet exists (`getState()`).
 
 ## React
@@ -119,11 +145,11 @@ function Balance() {
 }
 ```
 
-Hooks: `useBeldex()` (full context incl. the raw `BeldexWeb3` client), `useConnect()`, `useBalance({ pollMs })`. `react >= 18` is an optional peer dependency — plain-JS users install nothing extra. See `examples/react-demo`.
+Hooks: `useBeldex()` (full context incl. the raw `BeldexWeb3` client), `useConnect()`, `useBalance({ pollMs })`, `useSignMessage()` (`sign(msg)` resolves null on user rejection; `signing`/`data`/`error` state). Pass `signOnConnect` to `<BeldexProvider>` to run `connectWithProof()` on connect and expose the result as `proof` (via context and `useConnect()`). `react >= 18` is an optional peer dependency — plain-JS users install nothing extra. See `examples/react-demo`.
 
 ## API surface
 
-`detectProvider(opts?)` · `new BeldexWeb3(provider, opts?)` · `connect()` · `disconnect()` · `getAddress()` · `getBalance()` · `sendTransaction(params)` · `signMessage(msg)`* · `verifyMessage(params)`* · `resolveBns(name)` · `getNetwork()` · `getState()` · `on/off/once(event, fn)` · `address` / `isConnected` getters. (*reserved — see above.)
+`detectProvider(opts?)` · `new BeldexWeb3(provider, opts?)` · `connect()` · `connectWithProof(opts?)` · `disconnect()` · `getAddress()` · `getBalance()` · `sendTransaction(params)` · `signMessage(msg)` · `verifyMessage(params)` · `resolveBns(name)` · `getNetwork()` · `getState()` · `buildAuthChallenge(address, nonce, ts)` · `on/off/once(event, fn)` · `address` / `isConnected` getters.
 
 Events: `connect`, `disconnect`, `accountsChanged`, `networkChanged`, `balanceChanged`, `lock`, `unlock`.
 
@@ -153,4 +179,4 @@ npm run typecheck
 
 ## Status
 
-v0.1.0 — protocol v1 implemented end-to-end against the Beldex Wallet extension (connect, reads, user-approved sends). `signMessage`/`verifyMessage` reserved pending WASM-core support. See `CHANGELOG.md`.
+Protocol v1 implemented end-to-end against the Beldex Wallet extension: connect (optionally with ownership proof), reads, user-approved sends, and message sign/verify (extension v1.1+; SigV1 `wallet2::sign` scheme). See `CHANGELOG.md`.

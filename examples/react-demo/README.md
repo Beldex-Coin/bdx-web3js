@@ -32,13 +32,15 @@ Open the printed URL (default `http://localhost:5173`) and click **Connect**.
 - **`ConnectButton`** — drop-in connect/disconnect button.
 - **`useConnect()`** — reads connection state (`isConnected`).
 - **`useBalance({ pollMs })`** — polls the spendable balance every 15 s; `balance.approximate` flags estimates.
-- **`fromAtomic()`** — converts atomic units to a display BDX amount.
+- **`fromAtomic()` / `toAtomic()`** — convert between atomic units and display BDX amounts.
+- **Send form** — `bdx.sendTransaction()` via `useBeldex()`: recipient, amount (or sweep-all), priority 1–5 (5 = flash), approval-gated in the wallet; shows tx hash + fee on success and handles user rejection (4001) quietly.
+- **`useSignMessage()`** — approval-gated `bdx_signMessage` ("SigV1…" encoding, spend key); the card then round-trips the fresh signature through `bdx.verifyMessage()` (public, no approval) and shows the result.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `src/main.jsx` | The entire app — provider, connect button, balance display |
+| `src/main.jsx` | The entire app — provider, connect button, balance display, send form |
 | `index.html` | Vite entry page |
 | `vite.config.js` | Vite + React plugin config |
 

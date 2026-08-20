@@ -4,3 +4,4 @@ docs/IMPLEMENTATION_PLAN.md
 docs/PHASE_PROMPTS.md
 docs/CORE_WASM_SIGNING_CHANGES.md
 .DS_Store
+*.timestamp-*.mjs

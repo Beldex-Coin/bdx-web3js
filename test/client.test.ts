@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { BeldexWeb3 } from '../src/client.js'
+import { BeldexWeb3, buildAuthChallenge } from '../src/client.js'
 import { BdxRpcError, ERROR_CODES } from '../src/errors.js'
 import { toAtomic } from '../src/units.js'
 import { MockWallet, MOCK_ADDRESS, MOCK_TXHASH, RpcHandlerError } from './mock-wallet.js'
@@ -65,6 +65,35 @@ describe('methods — happy paths', () => {
     expect(await bdx.verifyMessage({ message: 'hello', address: s.address, signature: s.signature })).toBe(true)
   })
 
+  it('connectWithProof() signs <address>:<nonce>:<timestamp>', async () => {
+    const r = await bdx.connectWithProof()
+    expect(r.address).toBe(MOCK_ADDRESS)
+    expect(r.proof).not.toBeNull()
+    const p = r.proof!
+    expect(p.signature).toBe('SigV1mockmockmock')
+    expect(p.nonce).toMatch(/^[0-9a-f]{32}$/)
+    expect(p.message).toBe(buildAuthChallenge(MOCK_ADDRESS, p.nonce, p.timestamp))
+    // the exact challenge went over the wire
+    const signCall = wallet.calls.find(c => c.method === 'bdx_signMessage')!
+    expect(signCall.params).toEqual({ message: p.message })
+    // fresh timestamp
+    expect(Math.abs(Date.now() - p.timestamp)).toBeLessThan(5_000)
+  })
+
+  it('connectWithProof() rejection → disconnects and throws (default)', async () => {
+    wallet.handlers.bdx_signMessage = () => { throw new RpcHandlerError(4001, 'rejected') }
+    await expect(bdx.connectWithProof()).rejects.toMatchObject({ code: 4001 })
+    expect(wallet.calls.some(c => c.method === 'bdx_disconnect')).toBe(true)
+    expect(bdx.isConnected).toBe(false)
+  })
+
+  it('connectWithProof({required:false}) rejection → connected, proof null', async () => {
+    wallet.handlers.bdx_signMessage = () => { throw new RpcHandlerError(4001, 'rejected') }
+    const r = await bdx.connectWithProof({ required: false })
+    expect(r.proof).toBeNull()
+    expect(bdx.isConnected).toBe(true)
+  })
+
   it('resolveBns trims input', async () => {
     const r = await bdx.resolveBns('  shop.bdx  ')
     expect(r.address).toBe(MOCK_ADDRESS)
@@ -87,6 +116,8 @@ describe('client-side validation (-32602 before any wire call)', () => {
     ['bad paymentId', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, paymentId: 'xyz' })],
     ['fractional amount string', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: '1.5' })],
     ['empty message', () => bdx.signMessage('')],
+    ['control chars in message', () => bdx.signMessage('line1\nline2')],
+    ['NUL in message', () => bdx.signMessage('a\x00b')],
     ['empty bns name', () => bdx.resolveBns('  ')]
   ]
   for (const [name, fn] of cases) {

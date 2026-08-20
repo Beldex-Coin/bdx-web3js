@@ -9,7 +9,7 @@ import { BeldexWeb3 } from './client.js'
 import { detectProvider } from './provider.js'
 import { BdxRpcError } from './errors.js'
 import { fromAtomic } from './units.js'
-import type { Balance, Nettype } from './types.js'
+import type { Balance, ConnectProof, Nettype, SignMessageResult } from './types.js'
 
 export type WalletStatus = 'detecting' | 'ready' | 'unavailable'
 
@@ -24,19 +24,28 @@ export interface BeldexContextValue {
   /** Opens the wallet's approval UI. Resolves quietly on user rejection. */
   connect: () => Promise<void>
   disconnect: () => Promise<void>
+  /** Ownership proof from connect (only with `signOnConnect`); with
+   *  `signOnConnect` a connection only exists together with its proof. */
+  proof: ConnectProof | null
 }
 
 const Ctx = createContext<BeldexContextValue | null>(null)
 
-export function BeldexProvider({ children, detectTimeoutMs = 3000 }: {
+export function BeldexProvider({ children, detectTimeoutMs = 3000, signOnConnect = false }: {
   children: ReactNode
   detectTimeoutMs?: number
+  /** When true, connect() immediately asks the wallet to sign an
+   *  `<address>:<nonce>:<timestamp>` challenge (bdx.connectWithProof) and
+   *  exposes the result as `proof`. All-or-nothing: declining the signature
+   *  disconnects the freshly made connection again. */
+  signOnConnect?: boolean
 }) {
   const [bdx, setBdx] = useState<BeldexWeb3 | null>(null)
   const [status, setStatus] = useState<WalletStatus>('detecting')
   const [address, setAddress] = useState<string | null>(null)
   const [network, setNetwork] = useState<Nettype | null>(null)
   const [connecting, setConnecting] = useState(false)
+  const [proof, setProof] = useState<ConnectProof | null>(null)
 
   useEffect(() => {
     let stop = false
@@ -44,8 +53,8 @@ export function BeldexProvider({ children, detectTimeoutMs = 3000 }: {
       if (stop) return
       if (!provider) { setStatus('unavailable'); return }
       const client = new BeldexWeb3(provider)
-      client.on('accountsChanged', () => setAddress(null))
-      client.on('disconnect', () => setAddress(null))
+      client.on('accountsChanged', () => { setAddress(null); setProof(null) })
+      client.on('disconnect', () => { setAddress(null); setProof(null) })
       client.on('connect', d => {
         const data = d as { address?: string } | undefined
         if (typeof data?.address === 'string') setAddress(data.address)
@@ -60,24 +69,32 @@ export function BeldexProvider({ children, detectTimeoutMs = 3000 }: {
     if (!bdx || connecting) return
     setConnecting(true)
     try {
-      const r = await bdx.connect()
-      setAddress(r.address)
-      setNetwork(r.network)
+      if (signOnConnect) {
+        const r = await bdx.connectWithProof()
+        setAddress(r.address)
+        setNetwork(r.network)
+        setProof(r.proof)
+      } else {
+        const r = await bdx.connect()
+        setAddress(r.address)
+        setNetwork(r.network)
+      }
     } catch (e) {
       if (!BdxRpcError.isUserRejection(e)) throw e
     } finally {
       setConnecting(false)
     }
-  }, [bdx, connecting])
+  }, [bdx, connecting, signOnConnect])
 
   const disconnect = useCallback(async () => {
     if (!bdx) return
     await bdx.disconnect()
     setAddress(null)
+    setProof(null)
   }, [bdx])
 
   return (
-    <Ctx.Provider value={{ bdx, status, address, network, connecting, connect, disconnect }}>
+    <Ctx.Provider value={{ bdx, status, address, network, connecting, connect, disconnect, proof }}>
       {children}
     </Ctx.Provider>
   )
@@ -90,8 +107,8 @@ export function useBeldex(): BeldexContextValue {
 }
 
 export function useConnect() {
-  const { connect, disconnect, address, connecting, status } = useBeldex()
-  return { connect, disconnect, address, isConnected: address !== null, connecting, status }
+  const { connect, disconnect, address, connecting, status, proof } = useBeldex()
+  return { connect, disconnect, address, isConnected: address !== null, connecting, status, proof }
 }
 
 export interface UseBalanceResult {
@@ -126,6 +143,48 @@ export function useBalance({ pollMs = 15_000 }: { pollMs?: number } = {}): UseBa
   }, [bdx, address, pollMs, load])
 
   return { balance, error, refresh: load }
+}
+
+export interface UseSignMessageResult {
+  /** Ask the wallet to sign `message` (user approves in the wallet's window).
+   *  Resolves with the result, or null if the user rejected (4001). */
+  sign: (message: string) => Promise<SignMessageResult | null>
+  signing: boolean
+  /** Last successful signature, or null. */
+  data: SignMessageResult | null
+  /** Last error (user rejections excluded), or null. */
+  error: Error | null
+  reset: () => void
+}
+
+/** Message signing (PROTOCOL.md §4.6, "SigV1…" encoding). User rejections
+ *  resolve quietly as null rather than throwing, matching connect(). */
+export function useSignMessage(): UseSignMessageResult {
+  const { bdx } = useBeldex()
+  const [signing, setSigning] = useState(false)
+  const [data, setData] = useState<SignMessageResult | null>(null)
+  const [error, setError] = useState<Error | null>(null)
+
+  const sign = useCallback(async (message: string): Promise<SignMessageResult | null> => {
+    if (!bdx) throw new Error('wallet not available')
+    setSigning(true)
+    setError(null)
+    try {
+      const r = await bdx.signMessage(message)
+      setData(r)
+      return r
+    } catch (e) {
+      if (BdxRpcError.isUserRejection(e)) return null
+      setError(e as Error)
+      throw e
+    } finally {
+      setSigning(false)
+    }
+  }, [bdx])
+
+  const reset = useCallback(() => { setData(null); setError(null) }, [])
+
+  return { sign, signing, data, error, reset }
 }
 
 // ---------------------------------------------------------------- button ----

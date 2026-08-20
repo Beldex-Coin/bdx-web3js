@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createRoot, Root } from 'react-dom/client'
 import { act } from 'react'
-import { BeldexProvider, ConnectButton, useBalance, useBeldex } from '../src/react.js'
+import { BeldexProvider, ConnectButton, useBalance, useBeldex, useConnect, useSignMessage } from '../src/react.js'
 import { MockWallet, MOCK_ADDRESS } from './mock-wallet.js'
 
 declare global {
@@ -78,6 +78,102 @@ describe('BeldexProvider + ConnectButton', () => {
     await act(async () => { btn.click() })
     await flush(50)
     expect(container.querySelector('button')!.textContent).toBe('Connect Beldex Wallet')
+  })
+})
+
+function SignProbe() {
+  const { sign, data, error } = useSignMessage()
+  return (
+    <div>
+      <button data-testid="sign" onClick={() => { sign('hello').catch(() => {}) }}>sign</button>
+      <span data-testid="sig">{data ? data.signature : error ? `err:${(error as { code?: number }).code}` : 'none'}</span>
+    </div>
+  )
+}
+
+describe('signOnConnect', () => {
+  function ProofProbe() {
+    const { proof } = useConnect()
+    return <span data-testid="proof">{proof ? proof.signature : 'none'}</span>
+  }
+
+  it('connect() also signs the challenge and exposes proof', async () => {
+    await act(async () => {
+      root.render(
+        <BeldexProvider detectTimeoutMs={200} signOnConnect>
+          <ConnectButton />
+          <ProofProbe />
+        </BeldexProvider>
+      )
+    })
+    await flush(50)
+    await act(async () => { container.querySelector('button')!.click() })
+    await flush(50)
+    expect(container.querySelector('[data-testid="proof"]')!.textContent).toBe('SigV1mockmockmock')
+    const sign = wallet.calls.find(c => c.method === 'bdx_signMessage')
+    expect(sign).toBeTruthy()
+    expect((sign!.params as { message: string }).message)
+      .toMatch(new RegExp(`^${MOCK_ADDRESS}:[0-9a-f]{32}:\\d+$`))
+  })
+
+  it('declined signature disconnects again (all-or-nothing)', async () => {
+    wallet.handlers.bdx_signMessage = () => { throw { code: 4001, message: 'no' } }
+    await act(async () => {
+      root.render(
+        <BeldexProvider detectTimeoutMs={200} signOnConnect>
+          <ConnectButton />
+          <ProofProbe />
+        </BeldexProvider>
+      )
+    })
+    await flush(50)
+    await act(async () => { container.querySelector('button')!.click() })
+    await flush(50)
+    expect(wallet.calls.some(c => c.method === 'bdx_disconnect')).toBe(true)
+    expect(container.querySelector('button')!.textContent).toBe('Connect Beldex Wallet')
+    expect(container.querySelector('[data-testid="proof"]')!.textContent).toBe('none')
+  })
+})
+
+describe('useSignMessage', () => {
+  async function mount() {
+    await act(async () => {
+      root.render(
+        <BeldexProvider detectTimeoutMs={200}>
+          <ConnectButton />
+          <SignProbe />
+        </BeldexProvider>
+      )
+    })
+    await flush(50)
+    await act(async () => { container.querySelector('button')!.click() }) // connect
+    await flush(50)
+  }
+  const signBtn = () => container.querySelector<HTMLButtonElement>('[data-testid="sign"]')!
+  const sig = () => container.querySelector('[data-testid="sig"]')!.textContent
+
+  it('signs via the wallet and exposes the result', async () => {
+    await mount()
+    await act(async () => { signBtn().click() })
+    await flush(50)
+    expect(sig()).toBe('SigV1mockmockmock')
+    expect(wallet.calls.some(c => c.method === 'bdx_signMessage')).toBe(true)
+  })
+
+  it('user rejection stays quiet (no error state)', async () => {
+    wallet.handlers.bdx_signMessage = () => { throw { code: 4001, message: 'no' } }
+    await mount()
+    await act(async () => { signBtn().click() })
+    await flush(50)
+    expect(sig()).toBe('none')
+  })
+
+  it('non-rejection errors land in error state', async () => {
+    wallet.handlers.bdx_signMessage = () => { throw { code: -32603, message: 'boom' } }
+    await mount()
+    await act(async () => { signBtn().click() })
+    await flush(50)
+    expect(sig()).toBe('err:-32603')
   })
 })
 

@@ -1,7 +1,7 @@
 // bdx-web3js — SDK for the Beldex Wallet browser extension.
 // Wire protocol: see PROTOCOL.md (protocolVersion 1).
 
-export { BeldexWeb3 } from './client.js'
+export { BeldexWeb3, buildAuthChallenge } from './client.js'
 export type { BeldexWeb3Options } from './client.js'
 export { detectProvider } from './provider.js'
 export type { DetectOptions } from './provider.js'

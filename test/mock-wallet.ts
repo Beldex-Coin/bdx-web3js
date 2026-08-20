@@ -43,7 +43,7 @@ function defaultHandlers(): Record<BdxMethod, Handler> {
       total: '12500000000', unlocked: '10000000000', approximate: true, height: 3_500_000
     }),
     bdx_sendTransaction: () => ({ txHash: MOCK_TXHASH, fee: '22110000' }),
-    bdx_signMessage: () => ({ signature: 'SigV2mockmockmock', address: MOCK_ADDRESS }),
+    bdx_signMessage: () => ({ signature: 'SigV1mockmockmock', address: MOCK_ADDRESS }),
     bdx_verifyMessage: () => ({ valid: true }),
     bdx_resolveBns: (p) => ({
       name: (p as { name: string }).name, address: MOCK_ADDRESS, verified: false

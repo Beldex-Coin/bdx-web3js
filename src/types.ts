@@ -63,6 +63,27 @@ export interface ConnectResult {
   network: Nettype
 }
 
+/** Ownership proof produced by `connectWithProof()` — the wallet signs a
+ *  challenge of `<address>:<nonce>:<timestamp>` right after connecting. */
+export interface ConnectProof {
+  /** The exact signed challenge: `<address>:<nonce>:<timestamp>`. */
+  message: string
+  /** "SigV1…" signature over `message` (PROTOCOL.md §4.6). */
+  signature: string
+  /** Signing wallet's primary address (== the connected address). */
+  address: string
+  /** 16 random bytes, hex (32 chars). */
+  nonce: string
+  /** Unix time in milliseconds when the challenge was built. */
+  timestamp: number
+}
+
+export interface ConnectWithProofResult extends ConnectResult {
+  /** null when the user approved the connection but rejected the signature
+   *  (only possible with `required: false`). */
+  proof: ConnectProof | null
+}
+
 export interface GetAddressResult {
   address: string
 }

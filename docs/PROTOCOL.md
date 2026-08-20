@@ -188,27 +188,35 @@ result: {
 - The Wallet MUST enforce a single in-flight send per wallet (dapp and panel flows share the lock); a second concurrent request fails with `-32603`.
 - Errors: `4001`, `4100`, `4900`, `4999`, `-32602` (any param invalid), `-32603` (build/broadcast failure; message MUST be sanitized).
 
-### 4.6 `bdx_signMessage` — approval — **reserved, not implemented in wallet v1**
+### 4.6 `bdx_signMessage` — approval
 
-> The v1 reference wallet answers this method with `-32601 methodNotFound`: the
-> underlying WASM core (`@bdxi/beldex-app-bridge` 3.0.0) exposes no message-signing
-> primitives (see `docs/PHASE4_CAPABILITY_REPORT.md`). The schema below is frozen for
-> when a core build with sign/verify exports ships.
+> **Implemented in wallet v1.1.** Signature encoding (this pins the v1.x addendum
+> anticipated by earlier drafts): the Monero-convention `wallet2::sign` scheme —
+> `keccak256(message)` signed with the account **spend key**
+> (`crypto::generate_signature` Schnorr construction), encoded as
+> `"SigV1" + monero_base58(c ‖ r)`. Interoperable with `beldex-wallet-cli`'s
+> `verify_value` and the explorer's ownership checks.
 
 ```ts
 params: {
   message: string                // UTF-8 text; Wallet MUST refuse non-text payloads
 }
 result: {
-  signature: string              // scheme fixed by the Wallet implementation (v1.x addendum
-                                 // will pin the exact encoding once Phase 4 lands)
+  signature: string              // "SigV1" + monero base58 (see above)
   address: string                // signing wallet's primary address
 }
 ```
 
-The approval UI MUST show the origin and the full message text (scrollable).
+- The approval UI MUST show the origin and the full message text (scrollable).
+- The Wallet MUST reject messages containing control characters (`\x00–\x1f`,
+  `\x7f`) with `-32602` — a message must not be able to disguise its content in
+  the approval card.
+- The reference wallet limits messages to **512 characters** (`-32602` beyond);
+  clients SHOULD stay within this.
+- Errors: `4001`, `4100`, `4900`, `4999`, `-32602`, `-32603` (signing failure;
+  message sanitized).
 
-### 4.7 `bdx_verifyMessage` — public — **reserved, not implemented in wallet v1** (see §4.6)
+### 4.7 `bdx_verifyMessage` — public
 
 ```ts
 params: { message: string; address: string; signature: string }
@@ -216,6 +224,10 @@ result: { valid: boolean }
 ```
 
 Pure verification; MUST NOT touch secrets and MUST NOT require a grant.
+`address` may be a standard or integrated address — the Wallet extracts the
+spend public key and runs `crypto::check_signature`. Malformed signatures or
+addresses that don't decode yield `{ valid: false }` or `-32602`, never a leak
+of why.
 
 ### 4.8 `bdx_resolveBns` — public
 
