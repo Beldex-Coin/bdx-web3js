@@ -3,5 +3,6 @@ dist/
 docs/IMPLEMENTATION_PLAN.md
 docs/PHASE_PROMPTS.md
 docs/CORE_WASM_SIGNING_CHANGES.md
+docs/PHASE4_CAPABILITY_REPORT.md
 .DS_Store
 *.timestamp-*.mjs

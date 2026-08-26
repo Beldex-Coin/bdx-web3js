@@ -18,9 +18,21 @@
   `proof: null`. `buildAuthChallenge()` exported for server-side verifiers.
 - React: `signOnConnect` prop on `BeldexProvider` — connect() runs
   `connectWithProof()` and exposes the result as `proof` (context + `useConnect`),
-  cleared on disconnect/accountsChanged.
-- `examples/react-demo`: sign-message card with local verify round trip; send form,
-  disconnect button, full address display.
+  cleared on disconnect/accountsChanged. Declining the signature disconnects the
+  fresh connection again (all-or-nothing).
+- `examples/react-demo`: sign-message card (approval-gated sign, then a public
+  `verifyMessage` round trip); send form (amount/sweep, priority 1–5 incl. flash,
+  tx hash + fee display); explicit disconnect button; full address display with
+  the connect-time proof (challenge + signature); README covering setup,
+  demonstrated APIs, and troubleshooting.
+
+### Changed
+- Mock wallet now returns a `SigV1…` signature (was `SigV2…`), matching the
+  encoding the reference wallet actually ships.
+- README: "Message signing" section (usage, SigV1 scheme, constraints,
+  `connectWithProof` + server-side verification guidance); reserved/`-32601`
+  notes removed; API surface, React hooks, and Status refreshed.
+- `.gitignore`: vite `*.timestamp-*.mjs` temp files ignored.
 
 ## 0.1.0 — 2026-08-11
 
