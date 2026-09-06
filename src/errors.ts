@@ -6,6 +6,10 @@ export const ERROR_CODES = {
   WALLET_LOCKED: 4900,
   NO_WALLET: 4901,
   REQUEST_EXPIRED: 4999,
+  /** SDK-local (never on the wire): a state-MUTATING call (send) timed out
+   *  locally — the wallet may still be executing it. NOT safe to blind-retry;
+   *  resolve via getOperationStatus() or an idempotent retry (same key). */
+  UNKNOWN_OUTCOME: 4998,
   METHOD_NOT_FOUND: -32601,
   INVALID_PARAMS: -32602,
   INTERNAL: -32603
@@ -39,9 +43,17 @@ export class BdxRpcError extends Error {
     return e instanceof BdxRpcError && e.code === ERROR_CODES.UNAUTHORIZED
   }
 
-  /** Approval TTL or SDK timeout elapsed — safe to retry. */
+  /** Approval TTL elapsed, or an SDK timeout on a READ — safe to retry.
+   *  (Send timeouts raise UNKNOWN_OUTCOME instead — see isUnknownOutcome.) */
   static isExpired(e: unknown): boolean {
     return e instanceof BdxRpcError && e.code === ERROR_CODES.REQUEST_EXPIRED
+  }
+
+  /** A send stopped being waited on but may still execute. NOT safe to
+   *  blind-retry — use sendTransactionSafe(), or getOperationStatus() /
+   *  a retry with the same idempotencyKey, to learn the true outcome. */
+  static isUnknownOutcome(e: unknown): boolean {
+    return e instanceof BdxRpcError && e.code === ERROR_CODES.UNKNOWN_OUTCOME
   }
 }
 

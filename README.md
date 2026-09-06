@@ -114,11 +114,26 @@ All failures throw `BdxRpcError` with a protocol `code`:
 | 4100 | Not connected | Call `connect()` |
 | 4900 | Wallet locked | "Open your Beldex Wallet to continue" |
 | 4901 | No wallet created | Point to wallet onboarding |
-| 4999 | Request/approval expired or timed out | Safe to retry |
+| 4999 | Request/approval expired or timed out | Safe to retry (reads/undecided approvals) |
+| 4998 | Send outcome unknown (local timeout) | Do NOT resend blindly — use `sendTransactionSafe()` / `getOperationStatus()` |
 | -32602 | Invalid params | Developer bug — check the message |
 | -32603 | Internal wallet error | Retry later |
 
-Helpers: `BeldexWeb3.isUserRejection(e)`, `.isLocked(e)`, `.isUnauthorized(e)`.
+Helpers: `BeldexWeb3.isUserRejection(e)`, `.isLocked(e)`, `.isUnauthorized(e)`, `.isUnknownOutcome(e)`.
+
+### Safe sends (no duplicate payments)
+
+Every send automatically carries an `idempotencyKey` (or pass your own to make it resumable): retrying with the same key can never create a second approved payment — the wallet (v1.2+) replays the recorded outcome. A local timeout on a send throws `4998 UNKNOWN_OUTCOME` (the transaction may still be broadcasting), never "expired":
+
+```ts
+const r = await bdx.sendTransactionSafe({ to, amount, idempotencyKey: orderId })
+if (r.status === 'confirmed') {
+  console.log('paid', r.txHash, r.idempotent ? '(recovered, not re-sent)' : '')
+} else {
+  // 'unresolved' — may still complete; re-run later with the SAME orderId,
+  // or poll bdx.getOperationStatus(operationId). Never treat as "not sent".
+}
+```
 
 ### Utilities
 
@@ -164,7 +179,7 @@ Hooks: `useBeldex()` (full context incl. the raw `BeldexWeb3` client), `useConne
 
 ## API surface
 
-`detectProvider(opts?)` · `new BeldexWeb3(provider, opts?)` · `connect()` · `connectWithProof(opts?)` · `disconnect()` · `getAddress()` · `getBalance()` · `sendTransaction(params)` · `signMessage(msg)` · `verifyMessage(params)` · `resolveBns(name)` · `getNetwork()` · `getState()` · `buildAuthChallenge(address, nonce, ts)` · `on/off/once(event, fn)` · `address` / `isConnected` getters.
+`detectProvider(opts?)` · `new BeldexWeb3(provider, opts?)` · `connect()` · `connectWithProof(opts?)` · `disconnect()` · `getAddress()` · `getBalance()` · `sendTransaction(params)` · `sendTransactionSafe(params, opts?)` · `getOperationStatus(operationId)` · `signMessage(msg)` · `verifyMessage(params)` · `resolveBns(name)` · `getNetwork()` · `getState()` · `buildAuthChallenge(address, nonce, ts)` · `on/off/once(event, fn)` · `address` / `isConnected` getters.
 
 Events: `connect`, `disconnect`, `accountsChanged`, `networkChanged`, `balanceChanged`, `lock`, `unlock`.
 

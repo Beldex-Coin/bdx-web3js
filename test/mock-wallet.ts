@@ -42,7 +42,8 @@ function defaultHandlers(): Record<BdxMethod, Handler> {
     bdx_getBalance: () => ({
       total: '12500000000', unlocked: '10000000000', approximate: true, height: 3_500_000
     }),
-    bdx_sendTransaction: () => ({ txHash: MOCK_TXHASH, fee: '22110000' }),
+    bdx_sendTransaction: () => ({ txHash: MOCK_TXHASH, fee: '22110000', operationId: 'op-1' }),
+    bdx_getOperationStatus: () => ({ status: 'unknown' }),
     bdx_signMessage: () => ({ signature: 'SigV1mockmockmock', address: MOCK_ADDRESS }),
     bdx_verifyMessage: () => ({ valid: true }),
     bdx_resolveBns: (p) => ({

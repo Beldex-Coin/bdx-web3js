@@ -48,15 +48,23 @@ describe('methods — happy paths', () => {
     expect(b.height).toBe(3_500_000)
   })
 
-  it('sendTransaction() sends atomic strings on the wire', async () => {
+  it('sendTransaction() sends atomic strings + an auto idempotencyKey on the wire', async () => {
     const r = await bdx.sendTransaction({ to: MOCK_ADDRESS, amount: toAtomic('1.25'), priority: 5 })
     expect(r.txHash).toBe(MOCK_TXHASH)
-    expect(wallet.calls[0]!.params).toEqual({ to: MOCK_ADDRESS, amount: '1250000000', priority: 5 })
+    const p = wallet.calls[0]!.params as Record<string, unknown>
+    expect(p).toMatchObject({ to: MOCK_ADDRESS, amount: '1250000000', priority: 5 })
+    expect(p.idempotencyKey).toMatch(/^[A-Za-z0-9._-]{8,128}$/)
+  })
+
+  it('sendTransaction() forwards a caller-supplied idempotencyKey', async () => {
+    await bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, idempotencyKey: 'order-42.retry' })
+    expect((wallet.calls[0]!.params as { idempotencyKey: string }).idempotencyKey).toBe('order-42.retry')
   })
 
   it('sendTransaction() sweep omits amount', async () => {
     await bdx.sendTransaction({ to: MOCK_ADDRESS, sweep: true })
-    expect(wallet.calls[0]!.params).toEqual({ to: MOCK_ADDRESS, sweep: true })
+    expect(wallet.calls[0]!.params).toMatchObject({ to: MOCK_ADDRESS, sweep: true })
+    expect(wallet.calls[0]!.params).not.toHaveProperty('amount')
   })
 
   it('signMessage / verifyMessage', async () => {
@@ -134,6 +142,86 @@ describe('methods — happy paths', () => {
   })
 })
 
+describe('send operation recovery (audit: unknown outcome ≠ safe retry)', () => {
+  const hang = () => new Promise(() => {}) // never answers
+
+  it('send timeout → UNKNOWN_OUTCOME (4998); read timeout stays 4999', async () => {
+    const fast = new BeldexWeb3(wallet.provider, { approvalTimeoutMs: 30, readTimeoutMs: 30 })
+    wallet.handlers.bdx_sendTransaction = hang
+    wallet.handlers.bdx_getBalance = hang
+    await expect(fast.sendTransaction({ to: MOCK_ADDRESS, amount: 1n }))
+      .rejects.toMatchObject({ code: ERROR_CODES.UNKNOWN_OUTCOME })
+    await expect(fast.getBalance())
+      .rejects.toMatchObject({ code: ERROR_CODES.REQUEST_EXPIRED })
+  })
+
+  it('getOperationStatus decodes all four states', async () => {
+    const states = [
+      { status: 'executing', operationId: 'op-1' },
+      { status: 'confirmed', operationId: 'op-1', txHash: MOCK_TXHASH, fee: '5' },
+      { status: 'failed', operationId: 'op-1' },
+      { status: 'unknown' }
+    ] as const
+    for (const s of states) {
+      wallet.handlers.bdx_getOperationStatus = () => s
+      expect(await bdx.getOperationStatus('op-1')).toEqual(s)
+    }
+    expect(wallet.calls.every(c => c.method === 'bdx_getOperationStatus')).toBe(true)
+  })
+
+  it('sendTransactionSafe resolves a timed-out send via idempotent replay — one payment', async () => {
+    const fast = new BeldexWeb3(wallet.provider, { approvalTimeoutMs: 30 })
+    let approvals = 0
+    const seenKeys = new Set<string>()
+    wallet.handlers.bdx_sendTransaction = (p) => {
+      const key = (p as { idempotencyKey: string }).idempotencyKey
+      seenKeys.add(key)
+      if (approvals === 0) { approvals++; return hang() }      // 1st: approved+executing, reply lost
+      // retry with same key: wallet replays the recorded outcome, no 2nd approval
+      return { txHash: MOCK_TXHASH, fee: '5', operationId: 'op-9', idempotent: true }
+    }
+    const r = await fast.sendTransactionSafe(
+      { to: MOCK_ADDRESS, amount: 1n },
+      { resolveTimeoutMs: 2_000, pollIntervalMs: 10 }
+    )
+    expect(r).toMatchObject({ status: 'confirmed', txHash: MOCK_TXHASH, idempotent: true, operationId: 'op-9' })
+    expect(approvals).toBe(1)        // exactly one approved transaction
+    expect(seenKeys.size).toBe(1)    // every attempt reused the same key
+  })
+
+  it('sendTransactionSafe waits out "already in progress" then surfaces the confirmation', async () => {
+    let calls = 0
+    wallet.handlers.bdx_sendTransaction = () => {
+      calls++
+      if (calls <= 2) throw new RpcHandlerError(-32603, 'a transaction for this idempotency key is already in progress')
+      return { txHash: MOCK_TXHASH, fee: '5', operationId: 'op-3', idempotent: true }
+    }
+    const r = await bdx.sendTransactionSafe(
+      { to: MOCK_ADDRESS, amount: 1n, idempotencyKey: 'resume-key-1' },
+      { resolveTimeoutMs: 2_000, pollIntervalMs: 5 }
+    )
+    expect(r.status).toBe('confirmed')
+    expect(calls).toBe(3)
+  })
+
+  it('sendTransactionSafe returns unresolved (with the key) when the outcome stays unknown', async () => {
+    const fast = new BeldexWeb3(wallet.provider, { approvalTimeoutMs: 20 })
+    wallet.handlers.bdx_sendTransaction = hang
+    const r = await fast.sendTransactionSafe(
+      { to: MOCK_ADDRESS, amount: 1n, idempotencyKey: 'resume-key-2' },
+      { resolveTimeoutMs: 150, pollIntervalMs: 10 }
+    )
+    expect(r).toEqual({ status: 'unresolved', idempotencyKey: 'resume-key-2' })
+  })
+
+  it('sendTransactionSafe rethrows terminal errors (user rejection)', async () => {
+    wallet.handlers.bdx_sendTransaction = () => { throw new RpcHandlerError(4001, 'rejected') }
+    await expect(bdx.sendTransactionSafe({ to: MOCK_ADDRESS, amount: 1n }))
+      .rejects.toMatchObject({ code: 4001 })
+    expect(wallet.calls).toHaveLength(1) // no retry storm on a real "no"
+  })
+})
+
 describe('client-side validation (-32602 before any wire call)', () => {
   const cases: Array<[string, () => Promise<unknown>]> = [
     ['bad address', () => bdx.sendTransaction({ to: 'garbage', amount: 1n })],
@@ -142,6 +230,8 @@ describe('client-side validation (-32602 before any wire call)', () => {
     ['sweep+amount', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, sweep: true })],
     ['bad priority', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, priority: 9 as never })],
     ['bad paymentId', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, paymentId: 'xyz' })],
+    ['bad idempotencyKey', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, idempotencyKey: 'has spaces!' })],
+    ['empty operationId', () => bdx.getOperationStatus('')],
     ['fractional amount string', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: '1.5' })],
     ['empty message', () => bdx.signMessage('')],
     ['control chars in message', () => bdx.signMessage('line1\nline2')],

@@ -10,6 +10,7 @@ import type {
   AccountsChangedEventData, Balance, BdxEvent, BdxMethod, BeldexProvider,
   AuthChallenge, ConnectEventData, ConnectProof, ConnectResult,
   ConnectWithProofResult, GetAddressResult, GetBalanceResult, Nettype,
+  OperationStatus, SafeSendResult,
   GetNetworkResult, GetStateResult, ResolveBnsResult, SendTransactionParams,
   SendTransactionResult, SignMessageResult, VerifyMessageParams,
   VerifyMessageResult, WalletState
@@ -21,6 +22,13 @@ import { checkAddress } from './address.js'
 const APPROVAL_METHODS: ReadonlySet<BdxMethod> = new Set([
   'bdx_connect', 'bdx_sendTransaction', 'bdx_signMessage'
 ])
+
+/** Approval methods that MUTATE chain state. A local timeout on these means
+ *  "we stopped waiting", not "nothing happened" — the wallet may still be
+ *  broadcasting. They reject with UNKNOWN_OUTCOME instead of REQUEST_EXPIRED. */
+const MUTATING_METHODS: ReadonlySet<BdxMethod> = new Set(['bdx_sendTransaction'])
+
+const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9._-]{8,128}$/
 
 // ------------------------------------------------------------- auth proof ----
 // Single-line on purpose: the wallet rejects control characters (incl. \n),
@@ -139,7 +147,11 @@ export class BeldexWeb3 {
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(
-        () => reject(new BdxRpcError(ERROR_CODES.REQUEST_EXPIRED, `${method} timed out after ${timeoutMs}ms`)),
+        () => reject(MUTATING_METHODS.has(method)
+          ? new BdxRpcError(ERROR_CODES.UNKNOWN_OUTCOME,
+            `${method} timed out after ${timeoutMs}ms — outcome UNKNOWN: the wallet may still execute it. ` +
+            'Do not blind-retry; use sendTransactionSafe()/getOperationStatus() or retry with the same idempotencyKey.')
+          : new BdxRpcError(ERROR_CODES.REQUEST_EXPIRED, `${method} timed out after ${timeoutMs}ms`)),
         timeoutMs
       )
     })
@@ -269,6 +281,13 @@ export class BeldexWeb3 {
    */
   async sendTransaction(params: SendTransactionParams): Promise<SendTransactionResult> {
     const { to, amount, priority, paymentId, sweep } = params
+    let idempotencyKey = params.idempotencyKey
+    if (idempotencyKey !== undefined && !IDEMPOTENCY_KEY_RE.test(idempotencyKey)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'idempotencyKey must be 8–128 chars of A-Za-z0-9._-')
+    }
+    // Every send carries a key (wallet v1.2+): retrying with the same key can
+    // never create a second approved payment. Older wallets ignore the field.
+    idempotencyKey ??= randomNonceHex()
 
     const addr = checkAddress(to)
     if (!addr.valid) {
@@ -303,8 +322,56 @@ export class BeldexWeb3 {
       ...(wireAmount !== undefined ? { amount: wireAmount } : {}),
       ...(priority !== undefined ? { priority } : {}),
       ...(paymentId !== undefined ? { paymentId } : {}),
-      ...(sweep ? { sweep: true } : {})
+      ...(sweep ? { sweep: true } : {}),
+      idempotencyKey
     })
+  }
+
+  /** True outcome of a send operation (wallet v1.2+). Only the origin that
+   *  created the operation can read it; no approval needed. */
+  async getOperationStatus(operationId: string): Promise<OperationStatus> {
+    if (typeof operationId !== 'string' || !operationId) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'operationId must be a non-empty string')
+    }
+    return this.request<OperationStatus>('bdx_getOperationStatus', { operationId })
+  }
+
+  /**
+   * Send with recovery: never turns an unknown outcome into a duplicate
+   * payment. Attaches an idempotencyKey (yours, or generated — returned in the
+   * `unresolved` case so you can resume after a restart) and, when the local
+   * approval timeout fires (UNKNOWN_OUTCOME) or the wallet reports the key
+   * already in progress, re-asks the wallet with the SAME key: a confirmed
+   * operation is replayed (no second approval), an executing one is awaited,
+   * and only a truly failed/absent one opens a fresh approval.
+   *
+   * Resolves `{ status: 'confirmed', txHash, fee, … }` or
+   * `{ status: 'unresolved', idempotencyKey }` — unresolved means the payment
+   * may STILL complete; treat it as pending, not as "nothing happened".
+   * Terminal errors (4001 rejection, -32602, …) throw as usual.
+   */
+  async sendTransactionSafe(
+    params: SendTransactionParams,
+    opts: { resolveTimeoutMs?: number; pollIntervalMs?: number } = {}
+  ): Promise<SafeSendResult> {
+    const idempotencyKey = params.idempotencyKey ?? randomNonceHex()
+    const deadline = Date.now() + (opts.resolveTimeoutMs ?? 30_000)
+    let delay = opts.pollIntervalMs ?? 1_000
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        const r = await this.sendTransaction({ ...params, idempotencyKey })
+        return { status: 'confirmed', ...r }
+      } catch (e) {
+        const stillUnknown = BdxRpcError.isUnknownOutcome(e)
+        const inProgress = e instanceof BdxRpcError
+          && e.code === ERROR_CODES.INTERNAL && /idempotency key is already in progress/i.test(e.message)
+        if (!stillUnknown && !inProgress) throw e // terminal: rejection, invalid params, …
+        if (Date.now() >= deadline) return { status: 'unresolved', idempotencyKey }
+        await new Promise(r => setTimeout(r, Math.min(delay, Math.max(0, deadline - Date.now()))))
+        delay = Math.min(delay * 2, 8_000)
+      }
+    }
   }
 
   /**

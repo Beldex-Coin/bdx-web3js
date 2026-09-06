@@ -31,6 +31,23 @@
   the connect-time proof (challenge + signature); README covering setup,
   demonstrated APIs, and troubleshooting.
 
+- Send operation recovery (external audit: a terminal timeout/error could
+  outlive an executing transaction, and "4999 is safe to retry" invited
+  duplicate payments — requires wallet v1.2+):
+  - every `sendTransaction` carries an `idempotencyKey` (auto-generated, or
+    caller-supplied for resumability); same key ⇒ the wallet replays the
+    recorded outcome, never a second approved payment. Result gains
+    `operationId` / `idempotent` (additive).
+  - new error `4998 UNKNOWN_OUTCOME` (SDK-local) + `isUnknownOutcome()`: a
+    local send timeout no longer reports `requestExpired` — the tx may still
+    broadcast. Reads keep `4999`.
+  - `getOperationStatus(operationId)` wraps the wallet's new
+    `bdx_getOperationStatus` (executing | confirmed | failed | unknown).
+  - `sendTransactionSafe()`: idempotent send + bounded recovery loop —
+    resolves replayed confirmations, waits out in-progress operations, and
+    returns an explicit `{ status: 'unresolved', idempotencyKey }` instead of
+    ever guessing. PROTOCOL.md §4.5/§4.5a/§6 document the scheme.
+
 ### Changed
 - Mock wallet now returns a `SigV1…` signature (was `SigV2…`), matching the
   encoding the reference wallet actually ships.

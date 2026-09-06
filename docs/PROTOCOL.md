@@ -176,17 +176,39 @@ params: {
                                  // A Wallet MAY reject this field with -32602 (the v1
                                  // reference wallet does) — prefer integrated addresses.
   sweep?: boolean                // default false; if true, `amount` MUST be absent
+  idempotencyKey?: string        // optional (wallet v1.2+): 8–128 chars of [A-Za-z0-9._-].
+                                 // Same (origin, key) replays the recorded outcome
+                                 // instead of creating a second approved payment.
 }
 result: {
   txHash: string
   fee: string                    // atomic units actually paid
+  operationId?: string           // wallet v1.2+ (additive): recovery handle for §4.5a
+  idempotent?: boolean           // wallet v1.2+: true when replayed from a prior
+                                 // operation with the same idempotencyKey
 }
 ```
 
 - The approval UI MUST display: the requesting origin, the **full untruncated** recipient address, the amount in BDX (all 9 decimals), the priority (flagged if flash), and a fee figure (labelled "estimated" if not exact) — all before consent.
 - The transaction MUST be built, signed, and broadcast entirely within Wallet contexts; no intermediate artifacts (unsigned tx, ring members, keys) ever reach the page.
 - The Wallet MUST enforce a single in-flight send per wallet (dapp and panel flows share the lock); a second concurrent request fails with `-32603`.
-- Errors: `4001`, `4100`, `4900`, `4999`, `-32602` (any param invalid), `-32603` (build/broadcast failure; message MUST be sanitized).
+- Errors: `4001`, `4100`, `4900`, `4999`, `-32602` (any param invalid), `-32603` (build/broadcast failure; message MUST be sanitized). With an `idempotencyKey` whose operation is still `executing`, the Wallet rejects with `-32603` ("a transaction for this idempotency key is already in progress") rather than opening a second approval.
+- **Unknown-outcome rule.** A terminal error or timeout observed by the page is NOT proof of non-execution: the Wallet may deliver a terminal response before, during, or after broadcasting. Clients MUST NOT blind-retry a send whose outcome is unknown; recovery is `bdx_getOperationStatus` (§4.5a) or a retry with the **same** `idempotencyKey`. (The SDK encodes this as its local error `4998 unknownOutcome` — SDK-side only, never on the wire.)
+
+### 4.5a `bdx_getOperationStatus` — public (granted origins), wallet v1.2+
+
+```ts
+params: { operationId: string }
+result:
+  | { status: 'executing', operationId: string }
+  | { status: 'confirmed', operationId: string, txHash: string, fee: string }
+  | { status: 'failed',    operationId: string }
+  | { status: 'unknown' }   // never created, expired (~24 h), or another origin's
+```
+
+Only the origin that created the operation may read it (anything else is
+`unknown` — existence MUST NOT leak across origins). Requires a grant and the
+read rate limit; no approval. Errors: `4100`, `-32602`, `-32603` (rate limited).
 
 ### 4.6 `bdx_signMessage` — approval
 
@@ -297,7 +319,8 @@ interface RpcError { code: number; message: string }
 | `4100` | unauthorized | Origin holds no grant for the active wallet. Call `bdx_connect`. |
 | `4900` | walletLocked | Wallet locked or unavailable. Prompt the user to open/unlock the wallet. |
 | `4901` | noWallet | Extension installed but no wallet created. |
-| `4999` | requestExpired | Approval not decided within the Wallet's TTL (5 min). Safe to retry. |
+| `4999` | requestExpired | Approval not decided within the Wallet's TTL (5 min). Safe to retry for reads and undecided approvals. For sends, see the unknown-outcome rule (§4.5): retry ONLY with the same `idempotencyKey`. |
+| `4998` | unknownOutcome | **SDK-local, never on the wire.** A state-mutating call (send) timed out locally; the Wallet may still execute it. Not blind-retriable — resolve via §4.5a or an idempotent retry. |
 | `-32601` | methodNotFound | Unknown method (see §1.1). |
 | `-32602` | invalidParams | Message MUST name the offending field; MUST NOT echo secret-adjacent data. |
 | `-32603` | internal | LWS/WASM/other failure. Message MUST be sanitized — no stack traces, no internal state, no key material, no LWS URLs. |

@@ -9,6 +9,7 @@ export type BdxMethod =
   | 'bdx_getAddress'
   | 'bdx_getBalance'
   | 'bdx_sendTransaction'
+  | 'bdx_getOperationStatus'
   | 'bdx_signMessage'
   | 'bdx_verifyMessage'
   | 'bdx_resolveBns'
@@ -142,13 +143,37 @@ export interface SendTransactionParams {
   paymentId?: string
   /** Send entire spendable balance; `amount` must be absent. */
   sweep?: boolean
+  /** 8–128 chars of `A-Za-z0-9._-`. Auto-generated when absent. Retrying with
+   *  the SAME key replays a recorded outcome instead of creating a second
+   *  approved payment — keep it if you may need to retry/resume this send. */
+  idempotencyKey?: string
 }
 
 export interface SendTransactionResult {
   txHash: string
   /** Atomic units actually paid as fee. */
   fee: string
+  /** Wallet operation id (v1.2+) — pass to getOperationStatus() for recovery. */
+  operationId?: string
+  /** true when this result was replayed from a prior operation with the same
+   *  idempotencyKey (no second approval, no second payment). */
+  idempotent?: boolean
 }
+
+/** Wire/SDK shape of bdx_getOperationStatus (wallet v1.2+). `unknown` =
+ *  never created, expired (~24 h), or created by a different origin. */
+export type OperationStatus =
+  | { status: 'executing'; operationId: string }
+  | { status: 'confirmed'; operationId: string; txHash: string; fee: string }
+  | { status: 'failed'; operationId: string }
+  | { status: 'unknown' }
+
+/** Result of sendTransactionSafe(). `unresolved` means the outcome could not
+ *  be determined in time — the payment may still complete; do NOT treat it as
+ *  "nothing happened". Resume later with the same idempotencyKey. */
+export type SafeSendResult =
+  | ({ status: 'confirmed' } & SendTransactionResult)
+  | { status: 'unresolved'; idempotencyKey: string }
 
 export interface SignMessageResult {
   signature: string
