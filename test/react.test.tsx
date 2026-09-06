@@ -112,8 +112,10 @@ describe('signOnConnect', () => {
     expect(container.querySelector('[data-testid="proof"]')!.textContent).toBe('SigV1mockmockmock')
     const sign = wallet.calls.find(c => c.method === 'bdx_signMessage')
     expect(sign).toBeTruthy()
-    expect((sign!.params as { message: string }).message)
-      .toMatch(new RegExp(`^${MOCK_ADDRESS}:[0-9a-f]{32}:\\d+$`))
+    const msg = (sign!.params as { message: string }).message
+    expect(msg).toMatch(/^beldex-auth-v1 /)
+    expect(msg).toContain(`domain=${globalThis.location.origin}`)
+    expect(msg).toContain(`address=${MOCK_ADDRESS}`)
   })
 
   it('declined signature disconnects again (all-or-nothing)', async () => {

@@ -63,19 +63,43 @@ export interface ConnectResult {
   network: Nettype
 }
 
+/** Server-issued challenge for `connectWithProof()` — issue the nonce
+ *  server-side, single-use, bound to the session that requested it. */
+export interface AuthChallenge {
+  /** Server-generated random nonce (8–128 chars of `A-Za-z0-9._-`).
+   *  The server MUST track it and consume it atomically on verification. */
+  nonce: string
+  /** Optional opaque request/session id, echoed into the signed message. */
+  requestId?: string
+  /** Proof validity window; default 300 000 ms. */
+  expiresInMs?: number
+}
+
 /** Ownership proof produced by `connectWithProof()` — the wallet signs a
- *  challenge of `<address>:<nonce>:<timestamp>` right after connecting. */
+ *  domain-bound `beldex-auth-v1` statement right after connecting. */
 export interface ConnectProof {
-  /** The exact signed challenge: `<address>:<nonce>:<timestamp>`. */
+  /** The exact signed statement (single line):
+   *  `beldex-auth-v1 domain=… uri=… address=… network=… nonce=… iat=… exp=…[ rid=…]` */
   message: string
   /** "SigV1…" signature over `message` (PROTOCOL.md §4.6). */
   signature: string
   /** Signing wallet's primary address (== the connected address). */
   address: string
-  /** 16 random bytes, hex (32 chars). */
+  /** Requesting page's origin at signing time (audience binding). */
+  domain: string
+  /** Requesting page's origin + path at signing time. */
+  uri: string
+  network: Nettype
+  /** Server nonce if a challenge was supplied, else 16 random bytes hex. */
   nonce: string
-  /** Unix time in milliseconds when the challenge was built. */
-  timestamp: number
+  /** Unix ms when the statement was built. */
+  issuedAt: number
+  /** Unix ms after which verifiers MUST reject the proof. */
+  expirationTime: number
+  requestId?: string
+  /** true when the nonce came from a server-issued `AuthChallenge` —
+   *  only such proofs are suitable for authentication. */
+  serverIssued: boolean
 }
 
 export interface ConnectWithProofResult extends ConnectResult {

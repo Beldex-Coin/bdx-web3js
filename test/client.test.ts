@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { BeldexWeb3, buildAuthChallenge } from '../src/client.js'
+import { BeldexWeb3, buildAuthChallenge, parseAuthChallenge } from '../src/client.js'
 import { BdxRpcError, ERROR_CODES } from '../src/errors.js'
 import { toAtomic } from '../src/units.js'
 import { MockWallet, MOCK_ADDRESS, MOCK_TXHASH, RpcHandlerError } from './mock-wallet.js'
@@ -65,19 +65,47 @@ describe('methods — happy paths', () => {
     expect(await bdx.verifyMessage({ message: 'hello', address: s.address, signature: s.signature })).toBe(true)
   })
 
-  it('connectWithProof() signs <address>:<nonce>:<timestamp>', async () => {
+  it('connectWithProof() signs a domain-bound beldex-auth-v1 statement', async () => {
     const r = await bdx.connectWithProof()
     expect(r.address).toBe(MOCK_ADDRESS)
-    expect(r.proof).not.toBeNull()
     const p = r.proof!
     expect(p.signature).toBe('SigV1mockmockmock')
-    expect(p.nonce).toMatch(/^[0-9a-f]{32}$/)
-    expect(p.message).toBe(buildAuthChallenge(MOCK_ADDRESS, p.nonce, p.timestamp))
-    // the exact challenge went over the wire
-    const signCall = wallet.calls.find(c => c.method === 'bdx_signMessage')!
-    expect(signCall.params).toEqual({ message: p.message })
-    // fresh timestamp
-    expect(Math.abs(Date.now() - p.timestamp)).toBeLessThan(5_000)
+    expect(p.nonce).toMatch(/^[0-9a-f]{32}$/)   // self-generated
+    expect(p.serverIssued).toBe(false)
+    expect(p.domain).toBe(globalThis.location.origin)
+    // message round-trips through the parser with the audience baked in
+    const f = parseAuthChallenge(p.message)!
+    expect(f).toMatchObject({
+      domain: globalThis.location.origin, address: MOCK_ADDRESS,
+      network: 'mainnet', nonce: p.nonce, issuedAt: p.issuedAt,
+      expirationTime: p.expirationTime
+    })
+    expect(p.message).toBe(buildAuthChallenge(f))
+    // the exact statement went over the wire; freshness + default TTL
+    expect(wallet.calls.find(c => c.method === 'bdx_signMessage')!.params).toEqual({ message: p.message })
+    expect(Math.abs(Date.now() - p.issuedAt)).toBeLessThan(5_000)
+    expect(p.expirationTime - p.issuedAt).toBe(300_000)
+  })
+
+  it('connectWithProof({challenge}) embeds the server nonce and requestId', async () => {
+    const r = await bdx.connectWithProof({
+      challenge: { nonce: 'srv-nonce-01.abc', requestId: 'req-77', expiresInMs: 60_000 }
+    })
+    const p = r.proof!
+    expect(p.serverIssued).toBe(true)
+    expect(p.nonce).toBe('srv-nonce-01.abc')
+    expect(p.requestId).toBe('req-77')
+    expect(p.expirationTime - p.issuedAt).toBe(60_000)
+    expect(p.message).toContain('nonce=srv-nonce-01.abc')
+    expect(p.message).toContain('rid=req-77')
+  })
+
+  it('connectWithProof rejects malformed server nonces before any wire call', async () => {
+    for (const nonce of ['short', 'has space in it', 'evil\nnonce', 'x'.repeat(200)]) {
+      await expect(bdx.connectWithProof({ challenge: { nonce } }))
+        .rejects.toMatchObject({ code: ERROR_CODES.INVALID_PARAMS })
+    }
+    expect(wallet.calls).toHaveLength(0)
   })
 
   it('connectWithProof() rejection → disconnects and throws (default)', async () => {

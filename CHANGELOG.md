@@ -11,11 +11,16 @@
   rejected with `-32602` before the request leaves the page.
 - React: `useSignMessage()` hook (sign + signing/result/error state, quiet on user
   rejection).
-- `connectWithProof()`: connect, then immediately sign an ownership challenge of
-  `<address>:<nonce>:<timestamp>` (nonce = 16 random bytes hex; two approvals).
+- `connectWithProof()`: connect, then immediately sign a domain-bound
+  `beldex-auth-v1` ownership statement (single line: domain, uri, address,
+  network, nonce, iat/exp, optional rid — audience-bound per external audit
+  finding on proof transferability). Accepts a server-issued
+  `challenge: { nonce, requestId?, expiresInMs? }` for authentication flows
+  (`proof.serverIssued`); self-generated nonces are marked non-auth.
   All-or-nothing by default: a declined signature disconnects the fresh
   connection and rethrows 4001; `required: false` keeps the connection with
-  `proof: null`. `buildAuthChallenge()` exported for server-side verifiers.
+  `proof: null`. `buildAuthChallenge()` / `parseAuthChallenge()` exported for
+  server-side verifiers.
 - React: `signOnConnect` prop on `BeldexProvider` — connect() runs
   `connectWithProof()` and exposes the result as `proof` (context + `useConnect`),
   cleared on disconnect/accountsChanged. Declining the signature disconnects the

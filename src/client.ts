@@ -8,8 +8,8 @@
 
 import type {
   AccountsChangedEventData, Balance, BdxEvent, BdxMethod, BeldexProvider,
-  ConnectEventData, ConnectProof, ConnectResult, ConnectWithProofResult,
-  GetAddressResult, GetBalanceResult,
+  AuthChallenge, ConnectEventData, ConnectProof, ConnectResult,
+  ConnectWithProofResult, GetAddressResult, GetBalanceResult, Nettype,
   GetNetworkResult, GetStateResult, ResolveBnsResult, SendTransactionParams,
   SendTransactionResult, SignMessageResult, VerifyMessageParams,
   VerifyMessageResult, WalletState
@@ -22,10 +22,69 @@ const APPROVAL_METHODS: ReadonlySet<BdxMethod> = new Set([
   'bdx_connect', 'bdx_sendTransaction', 'bdx_signMessage'
 ])
 
-/** The challenge signed by `connectWithProof()`: `<address>:<nonce>:<timestamp>`.
- *  Exported so verifiers can rebuild it from the parts they stored. */
-export function buildAuthChallenge(address: string, nonce: string, timestamp: number): string {
-  return `${address}:${nonce}:${timestamp}`
+// ------------------------------------------------------------- auth proof ----
+// Single-line on purpose: the wallet rejects control characters (incl. \n),
+// so a SIWE-style multi-line statement can never pass its approval filter.
+
+const AUTH_VERSION = 'beldex-auth-v1'
+const DEFAULT_PROOF_TTL_MS = 300_000
+/** Server nonces: opaque but wire-safe — no spaces, no control chars. */
+const SERVER_NONCE_RE = /^[A-Za-z0-9._-]{8,128}$/
+
+export interface AuthMessageFields {
+  domain: string
+  uri: string
+  address: string
+  network: Nettype
+  nonce: string
+  issuedAt: number
+  expirationTime: number
+  requestId?: string
+}
+
+/** Build the exact `beldex-auth-v1` statement `connectWithProof()` signs.
+ *  Exported so server-side verifiers can rebuild it from stored fields. */
+export function buildAuthChallenge(f: AuthMessageFields): string {
+  const parts = [
+    AUTH_VERSION,
+    `domain=${f.domain}`, `uri=${f.uri}`, `address=${f.address}`,
+    `network=${f.network}`, `nonce=${f.nonce}`,
+    `iat=${f.issuedAt}`, `exp=${f.expirationTime}`
+  ]
+  if (f.requestId !== undefined) parts.push(`rid=${f.requestId}`)
+  for (const p of parts) {
+    // eslint-disable-next-line no-control-regex
+    if (/[\s\x00-\x1f\x7f]/.test(p)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, `auth field contains whitespace/control characters: ${p.split('=')[0]}`)
+    }
+  }
+  const message = parts.join(' ')
+  if (message.length > 512) {
+    throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'auth statement exceeds the wallet 512-char limit')
+  }
+  return message
+}
+
+/** Parse a `beldex-auth-v1` statement back into fields (null if malformed).
+ *  Verifiers MUST also check domain === their own origin, address, network,
+ *  nonce (issued by them, unused), and the iat/exp window. */
+export function parseAuthChallenge(message: string): AuthMessageFields | null {
+  const parts = message.split(' ')
+  if (parts[0] !== AUTH_VERSION) return null
+  const kv: Record<string, string> = {}
+  for (const p of parts.slice(1)) {
+    const i = p.indexOf('=')
+    if (i <= 0) return null
+    kv[p.slice(0, i)] = p.slice(i + 1)
+  }
+  const { domain, uri, address, network, nonce, iat, exp, rid } = kv
+  if (!domain || !uri || !address || !nonce || (network !== 'mainnet' && network !== 'testnet')) return null
+  const issuedAt = Number(iat), expirationTime = Number(exp)
+  if (!Number.isInteger(issuedAt) || !Number.isInteger(expirationTime)) return null
+  return {
+    domain, uri, address, network, nonce, issuedAt, expirationTime,
+    ...(rid !== undefined ? { requestId: rid } : {})
+  }
 }
 
 /** 16 random bytes as 32 hex chars (web crypto — browsers and Node ≥18). */
@@ -105,29 +164,61 @@ export class BeldexWeb3 {
   }
 
   /**
-   * Connect, then immediately ask the wallet to sign an ownership challenge of
-   * `<address>:<nonce>:<timestamp>` (two approvals: connect, then signature).
+   * Connect, then immediately ask the wallet to sign a domain-bound ownership
+   * statement (two approvals: connect, then signature):
    *
+   *   `beldex-auth-v1 domain=<origin> uri=<origin+path> address=<addr>
+   *    network=<net> nonce=<nonce> iat=<ms> exp=<ms>[ rid=<id>]`
+   *
+   * The page's own origin is baked into the signed bytes, so a proof obtained
+   * by site A is rejected by any verifier that checks `domain` — proofs are
+   * not transferable across relying parties.
+   *
+   * - For **authentication**, pass a server-issued `challenge` — the server
+   *   generates the nonce, tracks it, verifies every field of the returned
+   *   message (domain, address, network, nonce it issued, iat/exp window),
+   *   and consumes the nonce atomically. `proof.serverIssued` is true.
+   * - Without a challenge the SDK self-generates the nonce: still
+   *   domain-bound, fine as a liveness/ownership signal, but a verifier
+   *   cannot know the statement was made for *its* session — do not accept
+   *   such proofs for login.
    * - `required: true` (default): connection and proof are all-or-nothing — a
    *   rejected signature disconnects again and rethrows the 4001.
-   * - `required: false`: a rejected signature leaves the connection standing
-   *   and resolves with `proof: null`.
+   *   `required: false`: a rejected signature resolves with `proof: null`.
    *
-   * Verify server-side with `bdx_verifyMessage` (or CLI `verify_value`) and
-   * check the address, nonce freshness, and timestamp window yourself — the
-   * challenge contains no origin binding, so treat nonce+timestamp as your
-   * replay protection.
+   * Note: the wallet signs what the page asks; origin truthfulness ultimately
+   * needs wallet-side sender-origin injection (extension roadmap). Verifiers
+   * MUST still do full field checks server-side via `bdx_verifyMessage`.
    */
-  async connectWithProof(opts: { required?: boolean } = {}): Promise<ConnectWithProofResult> {
+  async connectWithProof(
+    opts: { challenge?: AuthChallenge; required?: boolean } = {}
+  ): Promise<ConnectWithProofResult> {
     const required = opts.required ?? true
+    if (opts.challenge && !SERVER_NONCE_RE.test(opts.challenge.nonce)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'challenge.nonce must be 8–128 chars of A-Za-z0-9._-')
+    }
+    const loc = (globalThis as { location?: Location }).location
+    if (!loc?.origin) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'connectWithProof requires a browser context (no location.origin to bind)')
+    }
     const { address, network } = await this.connect()
-    const nonce = randomNonceHex()
-    const timestamp = Date.now()
-    const message = buildAuthChallenge(address, nonce, timestamp)
+    const nonce = opts.challenge?.nonce ?? randomNonceHex()
+    const issuedAt = Date.now()
+    const expirationTime = issuedAt + (opts.challenge?.expiresInMs ?? DEFAULT_PROOF_TTL_MS)
+    const fields: AuthMessageFields = {
+      domain: loc.origin,
+      uri: loc.origin + loc.pathname,
+      address, network, nonce, issuedAt, expirationTime,
+      ...(opts.challenge?.requestId !== undefined ? { requestId: opts.challenge.requestId } : {})
+    }
+    const message = buildAuthChallenge(fields)
     try {
       const s = await this.signMessage(message)
       const proof: ConnectProof = {
-        message, signature: s.signature, address: s.address, nonce, timestamp
+        message, signature: s.signature, address: s.address,
+        domain: fields.domain, uri: fields.uri, network, nonce,
+        issuedAt, expirationTime, serverIssued: !!opts.challenge,
+        ...(fields.requestId !== undefined ? { requestId: fields.requestId } : {})
       }
       return { address, network, proof }
     } catch (e) {

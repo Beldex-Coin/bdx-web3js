@@ -67,17 +67,32 @@ const valid = await bdx.verifyMessage({ message, address, signature })
 
 Constraints (enforced client-side before the request leaves the page, and again by the wallet): non-empty plain text only — no control characters (`\n` included) — and the reference wallet caps messages at 512 characters.
 
-**Ownership proof on connect.** `connectWithProof()` connects and immediately has the wallet sign a `<address>:<nonce>:<timestamp>` challenge (two approvals back-to-back). All-or-nothing by default: if the user declines the signature, the fresh connection is revoked again and the 4001 is rethrown:
+**Ownership proof on connect.** `connectWithProof()` connects and immediately has the wallet sign a domain-bound, single-line `beldex-auth-v1` statement (two approvals back-to-back):
+
+```
+beldex-auth-v1 domain=<origin> uri=<origin+path> address=<addr> network=<net> nonce=<n> iat=<ms> exp=<ms>[ rid=<id>]
+```
+
+The page's origin is baked into the signed bytes, so a proof obtained by one site fails verification at any other relying party that checks `domain`. All-or-nothing by default: if the user declines the signature, the fresh connection is revoked again and the 4001 is rethrown.
 
 ```ts
-const { address, network, proof } = await bdx.connectWithProof()
-// proof: { message, signature, address, nonce, timestamp }
+// AUTHENTICATION — use a server-issued challenge (nonce made, tracked, and
+// consumed single-use by YOUR backend):
+const challenge = await fetch('/api/auth/challenge').then(r => r.json())
+// → { nonce, requestId?, expiresInMs? }
+const { proof } = await bdx.connectWithProof({ challenge })   // proof.serverIssued === true
+await fetch('/api/auth/verify', { method: 'POST', body: JSON.stringify(proof) })
+
+// Ownership/liveness signal only (SDK self-generates the nonce — do NOT
+// accept these for login; the server can't tell the statement was made for
+// its session):
+const { proof: p2 } = await bdx.connectWithProof()            // p2.serverIssued === false
 
 // lenient variant — declined signature keeps the connection, proof is null:
 await bdx.connectWithProof({ required: false })
 ```
 
-Verify server-side by rebuilding the challenge with the exported `buildAuthChallenge(address, nonce, timestamp)` and checking it via `bdx_verifyMessage` (or CLI `verify_value`). The challenge carries no origin binding — enforce nonce single-use and a timestamp window on your backend for replay protection.
+Server-side verification checklist: parse with `parseAuthChallenge(message)` (or rebuild via `buildAuthChallenge(fields)` from stored parts), then check **all** of: signature via `bdx_verifyMessage`/CLI `verify_value` · `domain` equals *your* origin · `address` is the claimed account · `network` is the expected chain · `nonce` was issued by you, unused, and consume it atomically · now within `iat`/`exp`. Reject anything that fails a single check. (The statement is single-line by design — the wallet rejects control characters, so multi-line SIWE-style layouts cannot be signed.) Note: a page could still ask the wallet to sign a statement naming another domain via raw `signMessage` — the approval card shows the full text, and wallet-side sender-origin injection is on the extension roadmap to close this completely.
 
 ### BNS names
 

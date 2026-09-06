@@ -9,7 +9,7 @@ import { BeldexWeb3 } from './client.js'
 import { detectProvider } from './provider.js'
 import { BdxRpcError } from './errors.js'
 import { fromAtomic } from './units.js'
-import type { Balance, ConnectProof, Nettype, SignMessageResult } from './types.js'
+import type { AuthChallenge, Balance, ConnectProof, Nettype, SignMessageResult } from './types.js'
 
 export type WalletStatus = 'detecting' | 'ready' | 'unavailable'
 
@@ -34,11 +34,12 @@ const Ctx = createContext<BeldexContextValue | null>(null)
 export function BeldexProvider({ children, detectTimeoutMs = 3000, signOnConnect = false }: {
   children: ReactNode
   detectTimeoutMs?: number
-  /** When true, connect() immediately asks the wallet to sign an
-   *  `<address>:<nonce>:<timestamp>` challenge (bdx.connectWithProof) and
-   *  exposes the result as `proof`. All-or-nothing: declining the signature
-   *  disconnects the freshly made connection again. */
-  signOnConnect?: boolean
+  /** When set, connect() immediately asks the wallet to sign a domain-bound
+   *  `beldex-auth-v1` statement (bdx.connectWithProof) and exposes the result
+   *  as `proof`. Pass `{ getChallenge }` to fetch a server-issued nonce first —
+   *  required if the proof is used for authentication. All-or-nothing:
+   *  declining the signature disconnects the freshly made connection again. */
+  signOnConnect?: boolean | { getChallenge: () => Promise<AuthChallenge> }
 }) {
   const [bdx, setBdx] = useState<BeldexWeb3 | null>(null)
   const [status, setStatus] = useState<WalletStatus>('detecting')
@@ -70,7 +71,10 @@ export function BeldexProvider({ children, detectTimeoutMs = 3000, signOnConnect
     setConnecting(true)
     try {
       if (signOnConnect) {
-        const r = await bdx.connectWithProof()
+        const challenge = typeof signOnConnect === 'object'
+          ? await signOnConnect.getChallenge()
+          : undefined
+        const r = await bdx.connectWithProof(challenge ? { challenge } : {})
         setAddress(r.address)
         setNetwork(r.network)
         setProof(r.proof)
