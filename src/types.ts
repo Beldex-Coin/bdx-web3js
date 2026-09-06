@@ -1,20 +1,27 @@
 // Wire + public types, transcribed from PROTOCOL.md (protocolVersion 1).
 // PROTOCOL.md is normative; if this file and the spec disagree, the spec wins.
+// test/protocol-conformance.test.ts asserts the two cannot drift silently.
 
 // ---------------------------------------------------------------- methods ----
 
-export type BdxMethod =
-  | 'bdx_connect'
-  | 'bdx_disconnect'
-  | 'bdx_getAddress'
-  | 'bdx_getBalance'
-  | 'bdx_sendTransaction'
-  | 'bdx_getOperationStatus'
-  | 'bdx_signMessage'
-  | 'bdx_verifyMessage'
-  | 'bdx_resolveBns'
-  | 'bdx_getNetwork'
-  | 'bdx_getState'
+/** Runtime source of truth for the method set — the conformance test checks
+ *  this list against PROTOCOL.md's §4 headings verbatim. */
+export const BDX_METHODS = [
+  'bdx_connect',
+  'bdx_disconnect',
+  'bdx_getAddress',
+  'bdx_getBalance',
+  'bdx_sendTransaction',
+  'bdx_getOperationStatus',
+  'bdx_signMessage',
+  'bdx_signAuthChallenge',
+  'bdx_verifyMessage',
+  'bdx_resolveBns',
+  'bdx_getNetwork',
+  'bdx_getState'
+] as const
+
+export type BdxMethod = (typeof BDX_METHODS)[number]
 
 export type BdxEvent =
   | 'connect'
@@ -180,6 +187,26 @@ export interface SignMessageResult {
   address: string
 }
 
+/** `bdx_signAuthChallenge` (wallet v1.2+, grant + approval): the WALLET
+ *  composes and signs the `beldex-auth-v1` statement from the origin it
+ *  observes — the page supplies only the server challenge, so the signed
+ *  `domain` cannot be forged by page-side code. */
+export interface SignAuthChallengeParams {
+  /** Server-issued nonce, `/^[A-Za-z0-9._-]{8,128}$/`. */
+  nonce: string
+  /** Optional opaque id, `/^[A-Za-z0-9._-]{1,64}$/`. */
+  requestId?: string
+  /** Validity window, 60 000–3 600 000 ms; wallet default 300 000. */
+  expiresInMs?: number
+}
+
+export interface SignAuthChallengeResult {
+  /** The exact signed statement (wallet-composed). */
+  message: string
+  signature: string
+  address: string
+}
+
 export interface VerifyMessageParams {
   message: string
   address: string
@@ -202,9 +229,14 @@ export interface GetNetworkResult {
   nettype: Nettype
   height: number
   protocolVersion: number
-  walletVersion: string
+  /** Present ONLY for granted origins — version granularity aids phishing-kit
+   *  targeting, so the wallet withholds it pre-grant. Never assume it. */
+  walletVersion?: string
 }
 
+/** Pre-grant, `bdx_getState` is deliberately coarse: an ungranted origin sees
+ *  only `no-wallet` | `locked` — `unlocked` is collapsed to `locked` until the
+ *  origin holds a grant, so unlock status can't be probed for timing/phishing. */
 export type WalletState = 'locked' | 'unlocked' | 'no-wallet'
 
 export interface GetStateResult {

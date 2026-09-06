@@ -48,6 +48,16 @@
     returns an explicit `{ status: 'unresolved', idempotencyKey }` instead of
     ever guessing. PROTOCOL.md §4.5/§4.5a/§6 document the scheme.
 
+- Protocol doc/type drift reconciled with the wallet (external audit):
+  `walletVersion` is grant-gated (now optional in `GetNetworkResult`); pre-grant
+  `bdx_getState` collapses `unlocked` to `locked` (documented); origin display
+  is ASCII/punycode-preserving, not Unicode-decoded (anti-homograph — doc claim
+  corrected); request ids documented as correlation handles with the MAIN-world
+  threat model, not sender authentication; `bdx_signAuthChallenge` (§4.6a) and
+  `bdx_getOperationStatus` added to the method set and `types.ts`
+  (`BDX_METHODS` runtime constant). New `test/protocol-conformance.test.ts`
+  fails the build if PROTOCOL.md, `types.ts`, or README drift again.
+
 ### Changed
 - Mock wallet now returns a `SigV1…` signature (was `SigV2…`), matching the
   encoding the reference wallet actually ships.
