@@ -249,6 +249,9 @@ describe('client-side validation (-32602 before any wire call)', () => {
     ['empty message', () => bdx.signMessage('')],
     ['control chars in message', () => bdx.signMessage('line1\nline2')],
     ['NUL in message', () => bdx.signMessage('a\x00b')],
+    ['invisible unicode in message (RLO)', () => bdx.signMessage('pay 1\u202eBDX')],
+    ['variation selector in message', () => bdx.signMessage('ok\ufe0f')],
+    ['oversize message (513)', () => bdx.signMessage('x'.repeat(513))],
     ['empty bns name', () => bdx.resolveBns('  ')]
   ]
   for (const [name, fn] of cases) {

@@ -16,6 +16,7 @@ import type {
   VerifyMessageResult, WalletState
 } from './types.js'
 import { BdxRpcError, ERROR_CODES, toBdxError } from './errors.js'
+import { validateSigningText } from './signing-policy.js'
 import { parseAtomic } from './units.js'
 import { checkAddress } from './address.js'
 
@@ -61,15 +62,17 @@ export function buildAuthChallenge(f: AuthMessageFields): string {
   ]
   if (f.requestId !== undefined) parts.push(`rid=${f.requestId}`)
   for (const p of parts) {
-    // eslint-disable-next-line no-control-regex
-    if (/[\s\x00-\x1f\x7f]/.test(p)) {
-      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, `auth field contains whitespace/control characters: ${p.split('=')[0]}`)
+    // Fields are single tokens (no whitespace) AND must individually satisfy
+    // signing-text policy v1 — same classes the wallet rejects (§4.6/§4.6a).
+    const v = validateSigningText(p)
+    if (/\s/.test(p) || !v.ok) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS,
+        `auth field "${p.split('=')[0]}" invalid: ${!v.ok ? (v as { reason: string }).reason : 'contains whitespace'}`)
     }
   }
   const message = parts.join(' ')
-  if (message.length > 512) {
-    throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'auth statement exceeds the wallet 512-char limit')
-  }
+  const mv = validateSigningText(message)
+  if (!mv.ok) throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, `auth statement invalid: ${mv.reason}`)
   return message
 }
 
@@ -391,15 +394,10 @@ export class BeldexWeb3 {
    * The reference wallet caps messages at 512 characters.
    */
   async signMessage(message: string): Promise<SignMessageResult> {
-    if (typeof message !== 'string' || message.length === 0) {
-      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'message must be a non-empty string')
-    }
-    // Mirrors the wallet (§4.6): text only — a message must not be able to hide
-    // its content behind newlines/escapes in the approval card.
-    // eslint-disable-next-line no-control-regex
-    if (/[\x00-\x1f\x7f]/.test(message)) {
-      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'message must not contain control characters')
-    }
+    // Signing-text policy v1 — the same class-based rule the wallet router
+    // enforces (§4.6): reject early with the offending code point named.
+    const v = validateSigningText(message)
+    if (!v.ok) throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, v.reason)
     return this.request<SignMessageResult>('bdx_signMessage', { message })
   }
 

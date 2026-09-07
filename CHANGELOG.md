@@ -67,6 +67,17 @@
   chars stripped, length-bounded). PROTOCOL.md §7 documents that the SDK does
   no direct HTTP — response-size budgeting lives wallet-side.
 
+- Shared signing-text policy v1 (external audit; pinned to Unicode 15.1):
+  `validateSigningText()` mirrors the wallet router's class-based rejection —
+  C0/DEL/C1 controls, the full Default_Ignorable_Code_Point set (zero-width,
+  bidi controls, variation selectors incl. astral supplement, tags, BOM…),
+  line/paragraph separators, noncharacters of every plane, lone surrogates —
+  plus the 512-char cap. Enforced in `signMessage()` and every
+  `buildAuthChallenge()` field BEFORE dispatch; violations are rejected with
+  the offending code point named, never normalized or stripped. Exported with
+  `SIGNING_TEXT_POLICY_VERSION`; PROTOCOL.md §4.6 carries the normative
+  profile shared by wallet and SDK.
+
 ### Changed
 - Mock wallet now returns a `SigV1…` signature (was `SigV2…`), matching the
   encoding the reference wallet actually ships.

@@ -231,11 +231,35 @@ result: {
 ```
 
 - The approval UI MUST show the origin and the full message text (scrollable).
-- The Wallet MUST reject messages containing control characters (`\x00–\x1f`,
-  `\x7f`) with `-32602` — a message must not be able to disguise its content in
-  the approval card.
-- The reference wallet limits messages to **512 characters** (`-32602` beyond);
-  clients SHOULD stay within this.
+- The message MUST satisfy the **signing-text policy** below (`-32602`
+  otherwise) — a message must not be able to disguise or visually reorder its
+  content in the approval card.
+
+#### Signing-text policy — v1 (normative, pinned to Unicode 15.1)
+
+One shared profile, enforced twice: the Wallet rejects at its router before
+display/signing, and the SDK (`validateSigningText()`,
+`SIGNING_TEXT_POLICY_VERSION = '1'`) rejects client-side before dispatch so
+violations never round-trip. Signing text MUST be non-empty, at most **512
+characters**, and MUST NOT contain any code point in these classes:
+
+- C0 / DEL / C1 controls (U+0000–U+001F, U+007F–U+009F)
+- `Default_Ignorable_Code_Point` (full Unicode 15.1 set: soft hyphen, CGJ,
+  ALM U+061C, Hangul fillers, Khmer inherent vowels, Mongolian FVS/MVS,
+  zero-width + LRM/RLM, bidi embeddings/overrides, U+2060–U+206F incl. the
+  deprecated format controls, variation selectors U+FE00–U+FE0F and the
+  U+E0100–U+E01EF supplement, tags U+E0000–U+E007F, BOM, U+FFF0–U+FFF8,
+  shorthand/musical format controls)
+- line/paragraph separators U+2028, U+2029
+- noncharacters (U+FDD0–U+FDEF; U+xFFFE/U+xFFFF of every plane)
+- lone (unpaired) surrogates
+
+Everything else passes — ASCII, accented Latin, Cyrillic, CJK, Arabic letters,
+base emoji *without* a variation selector. Violations are **REJECTED, never
+normalized or stripped**: the exact input bytes are what gets signed, on both
+sides. The policy applies to `bdx_signMessage` messages and to every field of
+the `beldex-auth-v1` statement (§4.6a). Version bumps (UCD updates) MUST land
+in the Wallet and the SDK together.
 - Errors: `4001`, `4100`, `4900`, `4999`, `-32602`, `-32603` (signing failure;
   message sanitized).
 

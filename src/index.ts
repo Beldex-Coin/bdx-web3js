@@ -12,5 +12,10 @@ export { BdxRpcError, ERROR_CODES, toBdxError } from './errors.js'
 export type { ErrorCode } from './errors.js'
 export { toAtomic, fromAtomic, parseAtomic, ATOMIC_PER_BDX, BDX_DECIMALS } from './units.js'
 export { checkAddress, isValidAddressShape } from './address.js'
+export {
+  validateSigningText, SIGNING_TEXT_POLICY_VERSION, SIGNING_TEXT_UNICODE_VERSION,
+  MAX_SIGNING_TEXT_CHARS
+} from './signing-policy.js'
+export type { SigningTextVerdict } from './signing-policy.js'
 export type { AddressCheck, AddressKind } from './address.js'
 export * from './types.js'
