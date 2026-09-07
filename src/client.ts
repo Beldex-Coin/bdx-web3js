@@ -20,7 +20,7 @@ import { parseAtomic } from './units.js'
 import { checkAddress } from './address.js'
 
 const APPROVAL_METHODS: ReadonlySet<BdxMethod> = new Set([
-  'bdx_connect', 'bdx_sendTransaction', 'bdx_signMessage'
+  'bdx_connect', 'bdx_sendTransaction', 'bdx_signMessage', 'bdx_signAuthChallenge'
 ])
 
 /** Approval methods that MUTATE chain state. A local timeout on these means
@@ -141,24 +141,34 @@ export class BeldexWeb3 {
 
   // ---------------------------------------------------------------- core ----
 
-  /** Raw protocol call with timeout + error normalization. */
+  /** Raw protocol call with an application deadline (AbortController-backed
+   *  cancellation + race fallback) and error normalization. Approval methods
+   *  get the long budget (a human is deciding); reads the short one. */
   async request<T>(method: BdxMethod, params?: object): Promise<T> {
     const timeoutMs = APPROVAL_METHODS.has(method) ? this.approvalTimeoutMs : this.readTimeoutMs
+    const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(MUTATING_METHODS.has(method)
+      timer = setTimeout(() => {
+        // Reject FIRST (correct error category wins the race), then abort so a
+        // signal-aware transport actually cancels and drops the pending id.
+        reject(MUTATING_METHODS.has(method)
           ? new BdxRpcError(ERROR_CODES.UNKNOWN_OUTCOME,
             `${method} timed out after ${timeoutMs}ms — outcome UNKNOWN: the wallet may still execute it. ` +
             'Do not blind-retry; use sendTransactionSafe()/getOperationStatus() or retry with the same idempotencyKey.')
-          : new BdxRpcError(ERROR_CODES.REQUEST_EXPIRED, `${method} timed out after ${timeoutMs}ms`)),
-        timeoutMs
-      )
+          : new BdxRpcError(ERROR_CODES.REQUEST_EXPIRED, `${method} timed out after ${timeoutMs}ms`))
+        controller.abort()
+      }, timeoutMs)
     })
     try {
-      const args: { method: BdxMethod; params?: object } =
-        params !== undefined ? { method, params } : { method }
-      return (await Promise.race([this.provider.request(args), timeout])) as T
+      const call = this.provider.request({
+        method,
+        ...(params !== undefined ? { params } : {}),
+        signal: controller.signal
+      })
+      // The transport's post-abort rejection must not surface as unhandled.
+      call.catch(() => {})
+      return (await Promise.race([call, timeout])) as T
     } catch (e) {
       throw toBdxError(e)
     } finally {

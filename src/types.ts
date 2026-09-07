@@ -275,7 +275,10 @@ export interface BeldexProviderInfo {
 }
 
 export interface BeldexProvider {
-  request(args: { method: BdxMethod; params?: object }): Promise<unknown>
+  /** `signal` (additive, optional): the SDK aborts it when its application
+   *  deadline elapses so the transport can cancel the in-flight request —
+   *  providers that ignore it still work (the SDK also races the deadline). */
+  request(args: { method: BdxMethod; params?: object; signal?: AbortSignal }): Promise<unknown>
   on(event: BdxEvent, listener: (data: unknown) => void): void
   off(event: BdxEvent, listener: (data: unknown) => void): void
   readonly isBeldex: true

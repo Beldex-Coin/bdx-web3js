@@ -145,6 +145,19 @@ describe('methods — happy paths', () => {
 describe('send operation recovery (audit: unknown outcome ≠ safe retry)', () => {
   const hang = () => new Promise(() => {}) // never answers
 
+  it('deadline actually aborts the underlying call (signal wired through)', async () => {
+    let seen: AbortSignal | undefined
+    const provider = {
+      isBeldex: true as const,
+      request: (a: { signal?: AbortSignal }) => { seen = a.signal; return new Promise<never>(() => {}) },
+      on: () => {}, off: () => {}
+    }
+    const fast = new BeldexWeb3(provider, { readTimeoutMs: 30 })
+    await expect(fast.getBalance()).rejects.toMatchObject({ code: ERROR_CODES.REQUEST_EXPIRED })
+    expect(seen).toBeDefined()
+    expect(seen!.aborted).toBe(true) // cancelled, not merely abandoned
+  })
+
   it('send timeout → UNKNOWN_OUTCOME (4998); read timeout stays 4999', async () => {
     const fast = new BeldexWeb3(wallet.provider, { approvalTimeoutMs: 30, readTimeoutMs: 30 })
     wallet.handlers.bdx_sendTransaction = hang

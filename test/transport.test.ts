@@ -43,6 +43,22 @@ describe('PostMessageProvider over raw envelopes', () => {
     await expect(p.catch((e: BdxRpcError) => e.code)).resolves.toBe(4999)
   })
 
+  it('an aborted signal cancels the pending request immediately', async () => {
+    wallet.destroy() // nobody will ever answer
+    const ac = new AbortController()
+    const p = provider.request({ method: 'bdx_getState', signal: ac.signal })
+    ac.abort()
+    await expect(p).rejects.toMatchObject({ code: 4999, message: 'request aborted' })
+  })
+
+  it('a pre-aborted signal rejects without posting anything', async () => {
+    const ac = new AbortController()
+    ac.abort()
+    await expect(provider.request({ method: 'bdx_getState', signal: ac.signal }))
+      .rejects.toMatchObject({ code: 4999 })
+    expect(wallet.calls).toHaveLength(0)
+  })
+
   it('delivers events to listeners and supports off()', async () => {
     const seen: unknown[] = []
     const fn = (d: unknown) => seen.push(d)

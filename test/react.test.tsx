@@ -180,6 +180,37 @@ describe('useSignMessage', () => {
 })
 
 describe('useBalance', () => {
+  it('polling is single-flight: refresh during a slow load does not overlap', async () => {
+    let inFlight = 0, maxInFlight = 0
+    wallet.handlers.bdx_getBalance = async () => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise(r => setTimeout(r, 120))
+      inFlight--
+      return { total: '1', unlocked: '1', approximate: false, height: 1 }
+    }
+    let refresh!: () => void
+    function Probe() {
+      const r = useBalance({ pollMs: 60_000 })
+      refresh = r.refresh
+      return null
+    }
+    await act(async () => {
+      root.render(
+        <BeldexProvider detectTimeoutMs={200}>
+          <ConnectButton />
+          <Probe />
+        </BeldexProvider>
+      )
+    })
+    await flush(50)
+    await act(async () => { container.querySelector('button')!.click() }) // connect → 1st load
+    await flush(10)
+    refresh(); refresh(); refresh() // hammer while the first load is in flight
+    await flush(200)
+    expect(maxInFlight).toBe(1)
+    expect(wallet.calls.filter(c => c.method === 'bdx_getBalance')).toHaveLength(1)
+  })
+
   it('loads after connect and updates on balanceChanged', async () => {
     await act(async () => {
       root.render(

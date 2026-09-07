@@ -122,19 +122,24 @@ export interface UseBalanceResult {
   refresh: () => void
 }
 
-/** Polls the balance while connected and refreshes on balanceChanged pushes. */
+/** Polls the balance while connected and refreshes on balanceChanged pushes.
+ *  Single-flight: a poll never starts while the previous one is in flight
+ *  (a slow wallet response cannot cause overlapping reads). */
 export function useBalance({ pollMs = 15_000 }: { pollMs?: number } = {}): UseBalanceResult {
   const { bdx, address } = useBeldex()
   const [balance, setBalance] = useState<Balance | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const tick = useRef(0)
+  const inFlight = useRef(false)
 
   const load = useCallback(() => {
-    if (!bdx || address === null) return
+    if (!bdx || address === null || inFlight.current) return
+    inFlight.current = true
     const my = ++tick.current
     bdx.getBalance()
       .then(b => { if (tick.current === my) { setBalance(b); setError(null) } })
       .catch(e => { if (tick.current === my) setError(e as Error) })
+      .finally(() => { inFlight.current = false })
   }, [bdx, address])
 
   useEffect(() => {

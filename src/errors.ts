@@ -57,6 +57,14 @@ export class BdxRpcError extends Error {
   }
 }
 
+/** Terse, printable, bounded — raw transport/backend strings must not leak
+ *  through to callers unfiltered (audit: sanitize surfaced errors). */
+function sanitizeMessage(msg: string): string {
+  // eslint-disable-next-line no-control-regex
+  const clean = msg.replace(/[\x00-\x1f\x7f]/g, ' ').trim()
+  return clean.length > 256 ? `${clean.slice(0, 253)}…` : clean || 'error'
+}
+
 /** Normalize anything a provider throws/returns into a BdxRpcError. */
 export function toBdxError(e: unknown): BdxRpcError {
   if (e instanceof BdxRpcError) return e
@@ -65,7 +73,7 @@ export function toBdxError(e: unknown): BdxRpcError {
     typeof (e as { code?: unknown }).code === 'number' &&
     typeof (e as { message?: unknown }).message === 'string'
   ) {
-    return new BdxRpcError((e as { code: number }).code, (e as { message: string }).message)
+    return new BdxRpcError((e as { code: number }).code, sanitizeMessage((e as { message: string }).message))
   }
-  return new BdxRpcError(ERROR_CODES.INTERNAL, e instanceof Error ? e.message : String(e))
+  return new BdxRpcError(ERROR_CODES.INTERNAL, sanitizeMessage(e instanceof Error ? e.message : String(e)))
 }

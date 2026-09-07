@@ -58,6 +58,15 @@
   (`BDX_METHODS` runtime constant). New `test/protocol-conformance.test.ts`
   fails the build if PROTOCOL.md, `types.ts`, or README drift again.
 
+- Request deadlines & bounded responses (external audit): every
+  `provider.request()` now carries an AbortController-backed application
+  deadline (long for approvals, short for reads; configurable via the existing
+  constructor options) — the transport cancels the pending id on abort instead
+  of merely being raced. `useBalance` polling is single-flight (no overlapping
+  reads under a slow wallet). Surfaced error messages are sanitized (control
+  chars stripped, length-bounded). PROTOCOL.md §7 documents that the SDK does
+  no direct HTTP — response-size budgeting lives wallet-side.
+
 ### Changed
 - Mock wallet now returns a `SigV1…` signature (was `SigV2…`), matching the
   encoding the reference wallet actually ships.
