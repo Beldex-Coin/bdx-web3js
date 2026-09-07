@@ -17,5 +17,9 @@ export {
   MAX_SIGNING_TEXT_CHARS
 } from './signing-policy.js'
 export type { SigningTextVerdict } from './signing-policy.js'
+export {
+  REQUEST_SCHEMAS, sanitizeRequestParams, MAX_PARAM_KEYS, MAX_REQUEST_ID_CHARS
+} from './request-schema.js'
+export type { FieldSpec, MethodSchema } from './request-schema.js'
 export type { AddressCheck, AddressKind } from './address.js'
 export * from './types.js'

@@ -17,6 +17,7 @@ import type {
 } from './types.js'
 import { BdxRpcError, ERROR_CODES, toBdxError } from './errors.js'
 import { validateSigningText } from './signing-policy.js'
+import { sanitizeRequestParams } from './request-schema.js'
 import { parseAtomic } from './units.js'
 import { checkAddress } from './address.js'
 
@@ -148,6 +149,11 @@ export class BeldexWeb3 {
    *  cancellation + race fallback) and error normalization. Approval methods
    *  get the long budget (a human is deciding); reads the short one. */
   async request<T>(method: BdxMethod, params?: object): Promise<T> {
+    // Structural/size gate (mirror of the wallet's): validates against the
+    // per-method schema and rebuilds params as a fresh object holding ONLY
+    // recognized fields — oversized/unknown/no-param violations throw here
+    // and never reach the provider.
+    params = sanitizeRequestParams(method, params)
     const timeoutMs = APPROVAL_METHODS.has(method) ? this.approvalTimeoutMs : this.readTimeoutMs
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined

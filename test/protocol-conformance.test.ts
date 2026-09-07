@@ -5,6 +5,8 @@
 
 import { describe, it, expect } from 'vitest'
 import { BDX_METHODS } from '../src/types.js'
+import { REQUEST_SCHEMAS } from '../src/request-schema.js'
+import type { FieldSpec } from '../src/request-schema.js'
 // Vite/vitest raw imports — the docs and type source as plain text.
 import protocol from '../docs/PROTOCOL.md?raw'
 import typesSrc from '../src/types.ts?raw'
@@ -52,6 +54,28 @@ describe('PROTOCOL.md ↔ types.ts ↔ README.md conformance', () => {
     expect(protocol).toMatch(/operationId\?: string/)
     expect(typesSrc).toMatch(/idempotencyKey\?: string/)
     expect(typesSrc).toMatch(/operationId\?: string/)
+  })
+
+  it('§4.0 request-size profile table matches REQUEST_SCHEMAS exactly', () => {
+    // Parse the normative table into the same shape as the runtime schema.
+    const row = /^\| `(bdx_\w+)` \| (—|`\w+`) \| (—|string|number|boolean) \| (—|\d+) \| (—|yes|no) \|$/gm
+    const documented: Record<string, Record<string, FieldSpec>> = {}
+    for (const m of protocol.matchAll(row)) {
+      const [, method, fieldRaw, type, max, req] = m as unknown as string[]
+      documented[method!] ??= {}
+      if (fieldRaw === '—') continue // no-parameter method
+      const field = fieldRaw!.slice(1, -1)
+      documented[method!]![field] = {
+        type: type as FieldSpec['type'],
+        ...(max !== '—' ? { maxLen: Number(max) } : {}),
+        ...(req === 'yes' ? { required: true } : {})
+      }
+    }
+    expect(Object.keys(documented).sort()).toEqual(Object.keys(REQUEST_SCHEMAS).sort())
+    for (const method of Object.keys(REQUEST_SCHEMAS)) {
+      expect(documented[method], `table rows for ${method}`)
+        .toEqual(REQUEST_SCHEMAS[method as keyof typeof REQUEST_SCHEMAS])
+    }
   })
 
   it('signAuthChallenge wire shapes are typed as documented', () => {

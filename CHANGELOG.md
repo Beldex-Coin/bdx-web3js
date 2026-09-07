@@ -78,6 +78,18 @@
   `SIGNING_TEXT_POLICY_VERSION`; PROTOCOL.md §4.6 carries the normative
   profile shared by wallet and SDK.
 
+- Client-side request schemas & size limits (external audit; mirrors the
+  wallet's authoritative gates): `sanitizeRequestParams()` validates every
+  request against a per-method schema (`REQUEST_SCHEMAS`) before dispatch —
+  no-param methods reject any key; string caps per field (name ≤64,
+  verify message ≤8192 / address ≤128 / signature ≤256, sign message ≤512,
+  nonce ≤128, to ≤128, amount ≤32, paymentId ≤64, idempotencyKey ≤128,
+  operationId ≤128); ≤16 params keys; primitives only; unknown/extra fields
+  rejected (inherently covering `__proto__`/`constructor`/`prototype`); only
+  recognized fields are copied into a fresh object and forwarded. PROTOCOL.md
+  §4.0 carries the normative profile; the conformance test parses that table
+  and diffs it against the runtime schema so doc and caps cannot drift.
+
 ### Changed
 - Mock wallet now returns a `SigV1…` signature (was `SigV2…`), matching the
   encoding the reference wallet actually ships.

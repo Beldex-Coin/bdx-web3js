@@ -115,6 +115,45 @@ A grant is scoped to the pair *(origin, walletId)*. Switching the active wallet 
 
 `type BdxMethod` is the union of the method names below.
 
+### 4.0 Request-size profile (normative)
+
+Enforced twice from one contract: the Wallet rejects violating requests at its
+router before any work, and the SDK applies the same gates before dispatch
+(`sanitizeRequestParams()` / `REQUEST_SCHEMAS`). The conformance test parses
+this table and diffs it against the SDK's runtime schema, so they cannot drift.
+
+Global rules: request `id` is a non-empty string of ≤128 chars; params carry at
+most **16 own keys**; all field values are **primitives** (no nested objects or
+arrays); unknown/extra fields are **rejected**, never dropped — which inherently
+covers `__proto__`/`constructor`/`prototype`, since only recognized fields are
+copied into a fresh object; a populated params object on a no-parameter method
+is rejected. Violations: `-32602` (`-32601` for unknown methods). These are
+structural/size gates; semantic validation (§4.5, §4.6, …) applies in addition.
+
+| Method | Field | Type | Max | Required |
+|---|---|---|---|---|
+| `bdx_connect` | — | — | — | — |
+| `bdx_disconnect` | — | — | — | — |
+| `bdx_getAddress` | — | — | — | — |
+| `bdx_getBalance` | — | — | — | — |
+| `bdx_getNetwork` | — | — | — | — |
+| `bdx_getState` | — | — | — | — |
+| `bdx_resolveBns` | `name` | string | 64 | yes |
+| `bdx_verifyMessage` | `message` | string | 8192 | yes |
+| `bdx_verifyMessage` | `address` | string | 128 | yes |
+| `bdx_verifyMessage` | `signature` | string | 256 | yes |
+| `bdx_signMessage` | `message` | string | 512 | yes |
+| `bdx_signAuthChallenge` | `nonce` | string | 128 | yes |
+| `bdx_signAuthChallenge` | `requestId` | string | 64 | no |
+| `bdx_signAuthChallenge` | `expiresInMs` | number | — | no |
+| `bdx_sendTransaction` | `to` | string | 128 | yes |
+| `bdx_sendTransaction` | `amount` | string | 32 | no |
+| `bdx_sendTransaction` | `sweep` | boolean | — | no |
+| `bdx_sendTransaction` | `priority` | number | — | no |
+| `bdx_sendTransaction` | `paymentId` | string | 64 | no |
+| `bdx_sendTransaction` | `idempotencyKey` | string | 128 | no |
+| `bdx_getOperationStatus` | `operationId` | string | 128 | yes |
+
 ### 4.1 `bdx_connect` — approval
 
 Request the calling origin be granted access to the active wallet.
