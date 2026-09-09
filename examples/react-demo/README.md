@@ -35,7 +35,8 @@ Open the printed URL (default `http://localhost:5173`) and click **Connect**.
 - **`fromAtomic()` / `toAtomic()`** — convert between atomic units and display BDX amounts.
 - **Send form** — `bdx.sendTransaction()` via `useBeldex()`: recipient, amount (or sweep-all), priority 1–5 (5 = flash), approval-gated in the wallet; shows tx hash + fee on success and handles user rejection (4001) quietly.
 - **`useSignMessage()`** — approval-gated `bdx_signMessage` ("SigV1…" encoding, spend key); the card then round-trips the fresh signature through `bdx.verifyMessage()` (public, no approval) and shows the result.
-- **Sign-in with Beldex** — `signOnConnect={{ getChallenge }}`: a mock in-page "backend" issues a single-use nonce, the wallet signs the domain-bound `beldex-auth-v1` statement on connect, and the mock backend runs the full relying-party checklist (`parseAuthChallenge`, domain === own origin, nonce issued/unused/consumed, iat/exp window, `verifyMessage`). Replace `mockAuthServer` with real `/api/auth/*` endpoints in production.
+- **Sign-in with Beldex** — `signOnConnect={{ getChallenge }}`: a mock in-page "backend" issues a single-use nonce; on connect the SDK requests `bdx_signAuthChallenge`, so the **wallet composes** the `beldex-auth-v1` statement from the origin it observed (the page never supplies the text — requires extension v1.2+); the mock backend then runs the full relying-party checklist (`parseAuthChallenge`, domain === own origin, nonce issued/unused/consumed, iat/exp window, `verifyMessage`). Replace `mockAuthServer` with real `/api/auth/*` endpoints in production.
+- **Signing-text policy live feedback** — the sign card runs `validateSigningText()` (policy v1) plus the reserved `beldex-auth-v1` prefix check as you type, mirroring exactly what the SDK/wallet reject, and disables the Sign button with the reason shown.
 
 ## Files
 

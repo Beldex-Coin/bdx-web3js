@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BeldexProvider, ConnectButton, useBeldex, useConnect, useBalance, useSignMessage, fromAtomic } from 'bdx-web3js/react'
-import { toAtomic, BdxRpcError, parseAuthChallenge } from 'bdx-web3js'
+import { toAtomic, BdxRpcError, parseAuthChallenge, validateSigningText } from 'bdx-web3js'
+
+// Reserved for wallet-composed auth statements (bdx_signAuthChallenge) —
+// the SDK and the wallet both refuse it in generic message signing.
+const RESERVED_PREFIX = 'beldex-auth-v1'
 
 // ---------------------------------------------------------------------------
 // Stand-in for YOUR backend. In production /api/auth/challenge issues the
@@ -80,8 +84,8 @@ function Address() {
       </p>
       {proof && (
         <p style={{ wordBreak: 'break-all' }}>
-          ✓ signed on connect ({proof.serverIssued ? 'server-issued nonce' : 'self-nonced — not for login'},
-          {' '}bound to <b>{proof.domain}</b>, expires {new Date(proof.expirationTime).toLocaleTimeString()})
+          ✓ wallet-composed statement signed on connect ({proof.serverIssued ? 'server-issued nonce' : 'self-nonced — not for login'},
+          {' '}bound by the wallet to <b>{proof.domain}</b>, expires {new Date(proof.expirationTime).toLocaleTimeString()})
           <br /><code>{proof.message}</code>
           <br />signature: <span style={{ color: '#3EC745' }}>{proof.signature}</span>
           <br />
@@ -202,6 +206,12 @@ function SignMessageCard() {
 
   if (!isConnected) return null
 
+  // Live client-side gates, same rules the SDK enforces before dispatch:
+  // signing-text policy v1 + the reserved auth-statement prefix.
+  const policy = message ? validateSigningText(message) : null
+  const reserved = message.trimStart().startsWith(RESERVED_PREFIX)
+  const blocked = (policy !== null && !policy.ok) || reserved
+
   const onSign = async (e) => {
     e.preventDefault()
     setVerified(null)
@@ -231,7 +241,15 @@ function SignMessageCard() {
           onChange={e => { setMessage(e.target.value); reset(); setVerified(null) }} />
       </label>
 
-      <button style={btn} type="submit" disabled={signing || !message}>
+      {blocked && (
+        <p style={{ color: '#ff5c5c', fontSize: 12, wordBreak: 'break-all', margin: '4px 0' }}>
+          {reserved
+            ? `"${RESERVED_PREFIX}" is reserved for wallet-composed sign-in statements — use the connect flow above`
+            : policy.reason}
+        </p>
+      )}
+
+      <button style={btn} type="submit" disabled={signing || !message || blocked}>
         {signing ? 'Waiting for approval…' : 'Sign'}
       </button>
 
