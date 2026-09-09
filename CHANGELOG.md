@@ -90,6 +90,14 @@
   §4.0 carries the normative profile; the conformance test parses that table
   and diffs it against the runtime schema so doc and caps cannot drift.
 
+- Auth statements can no longer be forged via generic signing (external
+  audit follow-up): `connectWithProof()` now obtains the wallet-composed
+  statement via `bdx_signAuthChallenge` (extension v1.2+ required; clear
+  `-32601` guidance on older wallets, with sanity checks on the returned
+  statement), a public `signAuthChallenge()` method is exposed, and
+  `signMessage()` rejects the reserved `beldex-auth-v1` prefix (normative in
+  PROTOCOL.md §4.6 — wallets must enforce it at the router too).
+
 ### Changed
 - Mock wallet now returns a `SigV1…` signature (was `SigV2…`), matching the
   encoding the reference wallet actually ships.

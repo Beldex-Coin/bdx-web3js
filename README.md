@@ -92,7 +92,7 @@ const { proof: p2 } = await bdx.connectWithProof()            // p2.serverIssued
 await bdx.connectWithProof({ required: false })
 ```
 
-Server-side verification checklist: parse with `parseAuthChallenge(message)` (or rebuild via `buildAuthChallenge(fields)` from stored parts), then check **all** of: signature via `bdx_verifyMessage`/CLI `verify_value` · `domain` equals *your* origin · `address` is the claimed account · `network` is the expected chain · `nonce` was issued by you, unused, and consume it atomically · now within `iat`/`exp`. Reject anything that fails a single check. (The statement is single-line by design — the wallet rejects control characters, so multi-line SIWE-style layouts cannot be signed.) On wallet v1.2+, prefer `bdx_signAuthChallenge` (via `bdx.request()`, PROTOCOL.md §4.6a) for login flows: the *wallet* composes the statement from the origin it observes via the browser, so page-side code cannot forge the bound domain. With plain `signMessage`, the approval card showing the full text is the mitigation.
+Server-side verification checklist: parse with `parseAuthChallenge(message)` (or rebuild via `buildAuthChallenge(fields)` from stored parts), then check **all** of: signature via `bdx_verifyMessage`/CLI `verify_value` · `domain` equals *your* origin · `address` is the claimed account · `network` is the expected chain · `nonce` was issued by you, unused, and consume it atomically · now within `iat`/`exp`. Reject anything that fails a single check. (The statement is single-line by design — the wallet rejects control characters, so multi-line SIWE-style layouts cannot be signed.) `connectWithProof()` obtains the statement via `bdx_signAuthChallenge` (wallet v1.2+ required): the *wallet* composes it from the origin it observes via the browser, so page-side code cannot forge the bound domain — and the reserved `beldex-auth-v1` prefix is rejected in generic `signMessage()`, so an auth statement cannot be forged through raw message signing either. `signAuthChallenge(params)` is also exposed directly for custom flows.
 
 ### BNS names
 
@@ -179,7 +179,7 @@ Hooks: `useBeldex()` (full context incl. the raw `BeldexWeb3` client), `useConne
 
 ## API surface
 
-`detectProvider(opts?)` · `new BeldexWeb3(provider, opts?)` · `connect()` · `connectWithProof(opts?)` · `disconnect()` · `getAddress()` · `getBalance()` · `sendTransaction(params)` · `sendTransactionSafe(params, opts?)` · `getOperationStatus(operationId)` · `signMessage(msg)` · `verifyMessage(params)` · `resolveBns(name)` · `getNetwork()` · `getState()` · `buildAuthChallenge(address, nonce, ts)` · `on/off/once(event, fn)` · `address` / `isConnected` getters.
+`detectProvider(opts?)` · `new BeldexWeb3(provider, opts?)` · `connect()` · `connectWithProof(opts?)` · `disconnect()` · `getAddress()` · `getBalance()` · `sendTransaction(params)` · `sendTransactionSafe(params, opts?)` · `getOperationStatus(operationId)` · `signMessage(msg)` · `signAuthChallenge(params)` · `verifyMessage(params)` · `resolveBns(name)` · `getNetwork()` · `getState()` · `buildAuthChallenge(address, nonce, ts)` · `on/off/once(event, fn)` · `address` / `isConnected` getters.
 
 Events: `connect`, `disconnect`, `accountsChanged`, `networkChanged`, `balanceChanged`, `lock`, `unlock`.
 

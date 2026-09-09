@@ -299,6 +299,12 @@ normalized or stripped**: the exact input bytes are what gets signed, on both
 sides. The policy applies to `bdx_signMessage` messages and to every field of
 the `beldex-auth-v1` statement (§4.6a). Version bumps (UCD updates) MUST land
 in the Wallet and the SDK together.
+
+**Reserved prefix.** A `bdx_signMessage` message that begins (after leading
+whitespace) with `beldex-auth-v1` MUST be rejected with `-32602`: audience-bound
+auth statements exist ONLY as wallet-composed §4.6a output, so a page can never
+obtain one through generic message signing. The SDK enforces this client-side;
+Wallets MUST enforce it at the router.
 - Errors: `4001`, `4100`, `4900`, `4999`, `-32602`, `-32603` (signing failure;
   message sanitized).
 

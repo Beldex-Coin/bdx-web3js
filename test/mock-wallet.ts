@@ -45,10 +45,18 @@ function defaultHandlers(): Record<BdxMethod, Handler> {
     bdx_sendTransaction: () => ({ txHash: MOCK_TXHASH, fee: '22110000', operationId: 'op-1' }),
     bdx_getOperationStatus: () => ({ status: 'unknown' }),
     bdx_signMessage: () => ({ signature: 'SigV1mockmockmock', address: MOCK_ADDRESS }),
-    bdx_signAuthChallenge: (p) => ({
-      message: `beldex-auth-v1 domain=http://localhost uri=http://localhost/ address=${MOCK_ADDRESS} network=mainnet nonce=${(p as { nonce: string }).nonce} iat=1 exp=2`,
-      signature: 'SigV1mockmockmock', address: MOCK_ADDRESS
-    }),
+    bdx_signAuthChallenge: (p) => {
+      // Composes like the real wallet: origin from the (browser-supplied)
+      // sender, iat/exp wallet-clock, page only contributes nonce/rid/expiry.
+      const q = p as { nonce: string; requestId?: string; expiresInMs?: number }
+      const origin = globalThis.location?.origin ?? 'http://localhost'
+      const iat = Date.now()
+      const exp = iat + (q.expiresInMs ?? 300_000)
+      let message = `beldex-auth-v1 domain=${origin} uri=${origin}/ address=${MOCK_ADDRESS} ` +
+        `network=mainnet nonce=${q.nonce} iat=${iat} exp=${exp}`
+      if (q.requestId !== undefined) message += ` rid=${q.requestId}`
+      return { message, signature: 'SigV1mockmockmock', address: MOCK_ADDRESS }
+    },
     bdx_verifyMessage: () => ({ valid: true }),
     bdx_resolveBns: (p) => ({
       name: (p as { name: string }).name, address: MOCK_ADDRESS, verified: false

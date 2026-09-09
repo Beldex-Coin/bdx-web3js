@@ -73,14 +73,14 @@ describe('methods — happy paths', () => {
     expect(await bdx.verifyMessage({ message: 'hello', address: s.address, signature: s.signature })).toBe(true)
   })
 
-  it('connectWithProof() signs a domain-bound beldex-auth-v1 statement', async () => {
+  it('connectWithProof() gets a wallet-composed beldex-auth-v1 statement via bdx_signAuthChallenge', async () => {
     const r = await bdx.connectWithProof()
     expect(r.address).toBe(MOCK_ADDRESS)
     const p = r.proof!
     expect(p.signature).toBe('SigV1mockmockmock')
     expect(p.nonce).toMatch(/^[0-9a-f]{32}$/)   // self-generated
     expect(p.serverIssued).toBe(false)
-    expect(p.domain).toBe(globalThis.location.origin)
+    expect(p.domain).toBe(globalThis.location.origin) // wallet-observed origin
     // message round-trips through the parser with the audience baked in
     const f = parseAuthChallenge(p.message)!
     expect(f).toMatchObject({
@@ -89,13 +89,36 @@ describe('methods — happy paths', () => {
       expirationTime: p.expirationTime
     })
     expect(p.message).toBe(buildAuthChallenge(f))
-    // the exact statement went over the wire; freshness + default TTL
-    expect(wallet.calls.find(c => c.method === 'bdx_signMessage')!.params).toEqual({ message: p.message })
+    // the wallet composed the statement — the page only sent the challenge
+    const sign = wallet.calls.find(c => c.method === 'bdx_signAuthChallenge')!
+    expect(sign.params).toEqual({ nonce: p.nonce, expiresInMs: 300_000 })
+    expect(wallet.calls.some(c => c.method === 'bdx_signMessage')).toBe(false)
     expect(Math.abs(Date.now() - p.issuedAt)).toBeLessThan(5_000)
     expect(p.expirationTime - p.issuedAt).toBe(300_000)
   })
 
-  it('connectWithProof({challenge}) embeds the server nonce and requestId', async () => {
+  it('signMessage refuses the reserved beldex-auth-v1 prefix (no forged auth statements)', async () => {
+    for (const m of ['beldex-auth-v1 domain=https://evil.example x', '  beldex-auth-v1 y']) {
+      await expect(bdx.signMessage(m)).rejects.toMatchObject({ code: ERROR_CODES.INVALID_PARAMS })
+    }
+    expect(wallet.calls).toHaveLength(0)
+  })
+
+  it('connectWithProof() on a pre-v1.2 wallet fails clearly (and disconnects)', async () => {
+    delete (wallet.handlers as Record<string, unknown>).bdx_signAuthChallenge
+    await expect(bdx.connectWithProof()).rejects.toMatchObject({ code: ERROR_CODES.METHOD_NOT_FOUND })
+    expect(wallet.calls.some(c => c.method === 'bdx_disconnect')).toBe(true)
+  })
+
+  it('connectWithProof() rejects an inconsistent wallet statement', async () => {
+    wallet.handlers.bdx_signAuthChallenge = () => ({
+      message: 'beldex-auth-v1 domain=x uri=x address=other network=mainnet nonce=deadbeef iat=1 exp=2',
+      signature: 'SigV1mockmockmock', address: MOCK_ADDRESS
+    })
+    await expect(bdx.connectWithProof()).rejects.toMatchObject({ code: ERROR_CODES.INTERNAL })
+  })
+
+  it('connectWithProof({challenge}) forwards the server nonce and requestId to the wallet', async () => {
     const r = await bdx.connectWithProof({
       challenge: { nonce: 'srv-nonce-01.abc', requestId: 'req-77', expiresInMs: 60_000 }
     })
@@ -106,6 +129,8 @@ describe('methods — happy paths', () => {
     expect(p.expirationTime - p.issuedAt).toBe(60_000)
     expect(p.message).toContain('nonce=srv-nonce-01.abc')
     expect(p.message).toContain('rid=req-77')
+    expect(wallet.calls.find(c => c.method === 'bdx_signAuthChallenge')!.params)
+      .toEqual({ nonce: 'srv-nonce-01.abc', requestId: 'req-77', expiresInMs: 60_000 })
   })
 
   it('connectWithProof rejects malformed server nonces before any wire call', async () => {
@@ -117,14 +142,14 @@ describe('methods — happy paths', () => {
   })
 
   it('connectWithProof() rejection → disconnects and throws (default)', async () => {
-    wallet.handlers.bdx_signMessage = () => { throw new RpcHandlerError(4001, 'rejected') }
+    wallet.handlers.bdx_signAuthChallenge = () => { throw new RpcHandlerError(4001, 'rejected') }
     await expect(bdx.connectWithProof()).rejects.toMatchObject({ code: 4001 })
     expect(wallet.calls.some(c => c.method === 'bdx_disconnect')).toBe(true)
     expect(bdx.isConnected).toBe(false)
   })
 
   it('connectWithProof({required:false}) rejection → connected, proof null', async () => {
-    wallet.handlers.bdx_signMessage = () => { throw new RpcHandlerError(4001, 'rejected') }
+    wallet.handlers.bdx_signAuthChallenge = () => { throw new RpcHandlerError(4001, 'rejected') }
     const r = await bdx.connectWithProof({ required: false })
     expect(r.proof).toBeNull()
     expect(bdx.isConnected).toBe(true)

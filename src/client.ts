@@ -10,7 +10,7 @@ import type {
   AccountsChangedEventData, Balance, BdxEvent, BdxMethod, BeldexProvider,
   AuthChallenge, ConnectEventData, ConnectProof, ConnectResult,
   ConnectWithProofResult, GetAddressResult, GetBalanceResult, Nettype,
-  OperationStatus, SafeSendResult,
+  OperationStatus, SafeSendResult, SignAuthChallengeParams, SignAuthChallengeResult,
   GetNetworkResult, GetStateResult, ResolveBnsResult, SendTransactionParams,
   SendTransactionResult, SignMessageResult, VerifyMessageParams,
   VerifyMessageResult, WalletState
@@ -217,9 +217,12 @@ export class BeldexWeb3 {
    *   rejected signature disconnects again and rethrows the 4001.
    *   `required: false`: a rejected signature resolves with `proof: null`.
    *
-   * Note: the wallet signs what the page asks; origin truthfulness ultimately
-   * needs wallet-side sender-origin injection (extension roadmap). Verifiers
-   * MUST still do full field checks server-side via `bdx_verifyMessage`.
+   * The statement is composed and signed BY THE WALLET (`bdx_signAuthChallenge`,
+   * wallet v1.2+) from the origin it observes via the browser — the page never
+   * supplies the statement text, and the SDK's `signMessage()` rejects the
+   * reserved `beldex-auth-v1` prefix, so a proof cannot be forged through
+   * generic message signing. Verifiers MUST still do full field checks
+   * server-side via `bdx_verifyMessage`.
    */
   async connectWithProof(
     opts: { challenge?: AuthChallenge; required?: boolean } = {}
@@ -228,28 +231,25 @@ export class BeldexWeb3 {
     if (opts.challenge && !SERVER_NONCE_RE.test(opts.challenge.nonce)) {
       throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'challenge.nonce must be 8–128 chars of A-Za-z0-9._-')
     }
-    const loc = (globalThis as { location?: Location }).location
-    if (!loc?.origin) {
-      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'connectWithProof requires a browser context (no location.origin to bind)')
-    }
     const { address, network } = await this.connect()
     const nonce = opts.challenge?.nonce ?? randomNonceHex()
-    const issuedAt = Date.now()
-    const expirationTime = issuedAt + (opts.challenge?.expiresInMs ?? DEFAULT_PROOF_TTL_MS)
-    const fields: AuthMessageFields = {
-      domain: loc.origin,
-      uri: loc.origin + loc.pathname,
-      address, network, nonce, issuedAt, expirationTime,
-      ...(opts.challenge?.requestId !== undefined ? { requestId: opts.challenge.requestId } : {})
-    }
-    const message = buildAuthChallenge(fields)
     try {
-      const s = await this.signMessage(message)
+      const s = await this.signAuthChallenge({
+        nonce,
+        expiresInMs: opts.challenge?.expiresInMs ?? DEFAULT_PROOF_TTL_MS,
+        ...(opts.challenge?.requestId !== undefined ? { requestId: opts.challenge.requestId } : {})
+      })
+      // Trust but verify the wallet's statement before handing it to a caller.
+      const f = parseAuthChallenge(s.message)
+      if (!f || s.address !== address || f.address !== address || f.nonce !== nonce) {
+        throw new BdxRpcError(ERROR_CODES.INTERNAL, 'wallet returned an inconsistent auth statement')
+      }
       const proof: ConnectProof = {
-        message, signature: s.signature, address: s.address,
-        domain: fields.domain, uri: fields.uri, network, nonce,
-        issuedAt, expirationTime, serverIssued: !!opts.challenge,
-        ...(fields.requestId !== undefined ? { requestId: fields.requestId } : {})
+        message: s.message, signature: s.signature, address: s.address,
+        domain: f.domain, uri: f.uri, network: f.network, nonce,
+        issuedAt: f.issuedAt, expirationTime: f.expirationTime,
+        serverIssued: !!opts.challenge,
+        ...(f.requestId !== undefined ? { requestId: f.requestId } : {})
       }
       return { address, network, proof }
     } catch (e) {
@@ -257,6 +257,10 @@ export class BeldexWeb3 {
         return { address, network, proof: null }
       }
       if (required) await this.disconnect().catch(() => {})
+      if (e instanceof BdxRpcError && e.code === ERROR_CODES.METHOD_NOT_FOUND) {
+        throw new BdxRpcError(ERROR_CODES.METHOD_NOT_FOUND,
+          'wallet does not support bdx_signAuthChallenge — extension v1.2+ is required for connectWithProof()')
+      }
       throw e
     }
   }
@@ -404,7 +408,31 @@ export class BeldexWeb3 {
     // enforces (§4.6): reject early with the offending code point named.
     const v = validateSigningText(message)
     if (!v.ok) throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, v.reason)
+    // The auth-statement prefix is RESERVED: audience-bound statements must
+    // only come from the wallet-composed bdx_signAuthChallenge path — a page
+    // must not be able to forge one via generic message signing.
+    if (message.trimStart().startsWith(AUTH_VERSION)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS,
+        `the "${AUTH_VERSION}" prefix is reserved — use connectWithProof()/bdx_signAuthChallenge for auth statements`)
+    }
     return this.request<SignMessageResult>('bdx_signMessage', { message })
+  }
+
+  /**
+   * Wallet-composed, origin-bound auth statement (wallet v1.2+, approval).
+   * The WALLET builds and signs the `beldex-auth-v1` statement from the origin
+   * it observes via the browser — the page supplies only the server challenge,
+   * so the signed `domain` cannot be forged by page-side code.
+   */
+  async signAuthChallenge(params: SignAuthChallengeParams): Promise<SignAuthChallengeResult> {
+    if (typeof params?.nonce !== 'string' || !SERVER_NONCE_RE.test(params.nonce)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'nonce must be 8–128 chars of A-Za-z0-9._-')
+    }
+    return this.request<SignAuthChallengeResult>('bdx_signAuthChallenge', {
+      nonce: params.nonce,
+      ...(params.requestId !== undefined ? { requestId: params.requestId } : {}),
+      ...(params.expiresInMs !== undefined ? { expiresInMs: params.expiresInMs } : {})
+    })
   }
 
   /** Verify a message signature. Public — no grant needed. */

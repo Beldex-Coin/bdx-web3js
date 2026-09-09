@@ -110,16 +110,15 @@ describe('signOnConnect', () => {
     await act(async () => { container.querySelector('button')!.click() })
     await flush(50)
     expect(container.querySelector('[data-testid="proof"]')!.textContent).toBe('SigV1mockmockmock')
-    const sign = wallet.calls.find(c => c.method === 'bdx_signMessage')
+    // wallet-composed: the page only sent the challenge
+    const sign = wallet.calls.find(c => c.method === 'bdx_signAuthChallenge')
     expect(sign).toBeTruthy()
-    const msg = (sign!.params as { message: string }).message
-    expect(msg).toMatch(/^beldex-auth-v1 /)
-    expect(msg).toContain(`domain=${globalThis.location.origin}`)
-    expect(msg).toContain(`address=${MOCK_ADDRESS}`)
+    expect((sign!.params as { nonce: string }).nonce).toMatch(/^[0-9a-f]{32}$/)
+    expect(wallet.calls.some(c => c.method === 'bdx_signMessage')).toBe(false)
   })
 
   it('declined signature disconnects again (all-or-nothing)', async () => {
-    wallet.handlers.bdx_signMessage = () => { throw { code: 4001, message: 'no' } }
+    wallet.handlers.bdx_signAuthChallenge = () => { throw { code: 4001, message: 'no' } }
     await act(async () => {
       root.render(
         <BeldexProvider detectTimeoutMs={200} signOnConnect>
