@@ -1,7 +1,44 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BeldexProvider, ConnectButton, useBeldex, useConnect, useBalance, useSignMessage, fromAtomic } from 'bdx-web3js/react'
-import { toAtomic, BdxRpcError } from 'bdx-web3js'
+import { toAtomic, BdxRpcError, parseAuthChallenge, validateSigningText } from 'bdx-web3js'
+
+// Reserved for wallet-composed auth statements (bdx_signAuthChallenge) —
+// the SDK and the wallet both refuse it in generic message signing.
+const RESERVED_PREFIX = 'beldex-auth-v1'
+
+// ---------------------------------------------------------------------------
+// Stand-in for YOUR backend. In production /api/auth/challenge issues the
+// nonce (stored server-side, single-use) and /api/auth/verify re-runs these
+// exact checks + bdx_verifyMessage before creating a session.
+const mockAuthServer = {
+  issued: new Map(), // nonce -> requestId
+
+  async getChallenge() {
+    const b = new Uint8Array(16)
+    crypto.getRandomValues(b)
+    const nonce = Array.from(b, x => x.toString(16).padStart(2, '0')).join('')
+    const requestId = `req-${Date.now()}`
+    this.issued.set(nonce, requestId)
+    return { nonce, requestId, expiresInMs: 120000 }
+  },
+
+  /** Full relying-party verification checklist from the SDK README. */
+  async verify(proof, bdx) {
+    const f = parseAuthChallenge(proof.message)
+    if (!f) return { ok: false, why: 'unparseable statement' }
+    if (f.domain !== window.location.origin) return { ok: false, why: `domain mismatch (${f.domain})` }
+    if (f.address !== proof.address) return { ok: false, why: 'address mismatch' }
+    if (!this.issued.has(f.nonce)) return { ok: false, why: 'unknown or reused nonce' }
+    this.issued.delete(f.nonce) // consume single-use
+    const now = Date.now()
+    if (now < f.issuedAt - 60000 || now > f.expirationTime) return { ok: false, why: 'outside iat/exp window' }
+    const valid = await bdx.verifyMessage({
+      message: proof.message, address: proof.address, signature: proof.signature
+    })
+    return valid ? { ok: true } : { ok: false, why: 'bad signature' }
+  }
+}
 
 const card = { border: '1px solid #222', padding: 16, margin: '16px 0' }
 const input = {
@@ -26,7 +63,18 @@ function DisconnectButton() {
 }
 
 function Address() {
+  const { bdx } = useBeldex()
   const { address, proof } = useConnect()
+  const [auth, setAuth] = useState(null) // null | { ok, why? }
+
+  // "Server-side" verification of the connect proof (mock backend above).
+  useEffect(() => {
+    if (!proof || !bdx) { setAuth(null); return }
+    let stale = false
+    mockAuthServer.verify(proof, bdx).then(r => { if (!stale) setAuth(r) })
+    return () => { stale = true }
+  }, [proof, bdx])
+
   if (!address) return null
   return (
     <div style={{ fontSize: 12 }}>
@@ -36,8 +84,14 @@ function Address() {
       </p>
       {proof && (
         <p style={{ wordBreak: 'break-all' }}>
-          ✓ ownership proved on connect — signed <code>{proof.message}</code>
+          ✓ wallet-composed statement signed on connect ({proof.serverIssued ? 'server-issued nonce' : 'self-nonced — not for login'},
+          {' '}bound by the wallet to <b>{proof.domain}</b>, expires {new Date(proof.expirationTime).toLocaleTimeString()})
+          <br /><code>{proof.message}</code>
           <br />signature: <span style={{ color: '#3EC745' }}>{proof.signature}</span>
+          <br />
+          {auth === null ? 'verifying with mock server…' : auth.ok
+            ? <span style={{ color: '#3EC745' }}>✓ mock server accepted the sign-in (nonce consumed)</span>
+            : <span style={{ color: '#ff5c5c' }}>✗ mock server rejected: {auth.why}</span>}
         </p>
       )}
     </div>
@@ -152,6 +206,12 @@ function SignMessageCard() {
 
   if (!isConnected) return null
 
+  // Live client-side gates, same rules the SDK enforces before dispatch:
+  // signing-text policy v1 + the reserved auth-statement prefix.
+  const policy = message ? validateSigningText(message) : null
+  const reserved = message.trimStart().startsWith(RESERVED_PREFIX)
+  const blocked = (policy !== null && !policy.ok) || reserved
+
   const onSign = async (e) => {
     e.preventDefault()
     setVerified(null)
@@ -181,7 +241,15 @@ function SignMessageCard() {
           onChange={e => { setMessage(e.target.value); reset(); setVerified(null) }} />
       </label>
 
-      <button style={btn} type="submit" disabled={signing || !message}>
+      {blocked && (
+        <p style={{ color: '#ff5c5c', fontSize: 12, wordBreak: 'break-all', margin: '4px 0' }}>
+          {reserved
+            ? `"${RESERVED_PREFIX}" is reserved for wallet-composed sign-in statements — use the connect flow above`
+            : policy.reason}
+        </p>
+      )}
+
+      <button style={btn} type="submit" disabled={signing || !message || blocked}>
         {signing ? 'Waiting for approval…' : 'Sign'}
       </button>
 
@@ -209,7 +277,7 @@ function SignMessageCard() {
 
 function App() {
   return (
-    <BeldexProvider signOnConnect>
+    <BeldexProvider signOnConnect={{ getChallenge: () => mockAuthServer.getChallenge() }}>
       <h1 style={{ fontSize: 18 }}>◆ bdx-web3js React demo</h1>
       <ConnectButton />
       <DisconnectButton />

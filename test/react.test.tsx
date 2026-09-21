@@ -110,14 +110,15 @@ describe('signOnConnect', () => {
     await act(async () => { container.querySelector('button')!.click() })
     await flush(50)
     expect(container.querySelector('[data-testid="proof"]')!.textContent).toBe('SigV1mockmockmock')
-    const sign = wallet.calls.find(c => c.method === 'bdx_signMessage')
+    // wallet-composed: the page only sent the challenge
+    const sign = wallet.calls.find(c => c.method === 'bdx_signAuthChallenge')
     expect(sign).toBeTruthy()
-    expect((sign!.params as { message: string }).message)
-      .toMatch(new RegExp(`^${MOCK_ADDRESS}:[0-9a-f]{32}:\\d+$`))
+    expect((sign!.params as { nonce: string }).nonce).toMatch(/^[0-9a-f]{32}$/)
+    expect(wallet.calls.some(c => c.method === 'bdx_signMessage')).toBe(false)
   })
 
   it('declined signature disconnects again (all-or-nothing)', async () => {
-    wallet.handlers.bdx_signMessage = () => { throw { code: 4001, message: 'no' } }
+    wallet.handlers.bdx_signAuthChallenge = () => { throw { code: 4001, message: 'no' } }
     await act(async () => {
       root.render(
         <BeldexProvider detectTimeoutMs={200} signOnConnect>
@@ -178,6 +179,37 @@ describe('useSignMessage', () => {
 })
 
 describe('useBalance', () => {
+  it('polling is single-flight: refresh during a slow load does not overlap', async () => {
+    let inFlight = 0, maxInFlight = 0
+    wallet.handlers.bdx_getBalance = async () => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise(r => setTimeout(r, 120))
+      inFlight--
+      return { total: '1', unlocked: '1', approximate: false, height: 1 }
+    }
+    let refresh!: () => void
+    function Probe() {
+      const r = useBalance({ pollMs: 60_000 })
+      refresh = r.refresh
+      return null
+    }
+    await act(async () => {
+      root.render(
+        <BeldexProvider detectTimeoutMs={200}>
+          <ConnectButton />
+          <Probe />
+        </BeldexProvider>
+      )
+    })
+    await flush(50)
+    await act(async () => { container.querySelector('button')!.click() }) // connect → 1st load
+    await flush(10)
+    refresh(); refresh(); refresh() // hammer while the first load is in flight
+    await flush(200)
+    expect(maxInFlight).toBe(1)
+    expect(wallet.calls.filter(c => c.method === 'bdx_getBalance')).toHaveLength(1)
+  })
+
   it('loads after connect and updates on balanceChanged', async () => {
     await act(async () => {
       root.render(

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { BeldexWeb3, buildAuthChallenge } from '../src/client.js'
+import { BeldexWeb3, buildAuthChallenge, parseAuthChallenge } from '../src/client.js'
 import { BdxRpcError, ERROR_CODES } from '../src/errors.js'
 import { toAtomic } from '../src/units.js'
 import { MockWallet, MOCK_ADDRESS, MOCK_TXHASH, RpcHandlerError } from './mock-wallet.js'
@@ -48,15 +48,23 @@ describe('methods — happy paths', () => {
     expect(b.height).toBe(3_500_000)
   })
 
-  it('sendTransaction() sends atomic strings on the wire', async () => {
+  it('sendTransaction() sends atomic strings + an auto idempotencyKey on the wire', async () => {
     const r = await bdx.sendTransaction({ to: MOCK_ADDRESS, amount: toAtomic('1.25'), priority: 5 })
     expect(r.txHash).toBe(MOCK_TXHASH)
-    expect(wallet.calls[0]!.params).toEqual({ to: MOCK_ADDRESS, amount: '1250000000', priority: 5 })
+    const p = wallet.calls[0]!.params as Record<string, unknown>
+    expect(p).toMatchObject({ to: MOCK_ADDRESS, amount: '1250000000', priority: 5 })
+    expect(p.idempotencyKey).toMatch(/^[A-Za-z0-9._-]{8,128}$/)
+  })
+
+  it('sendTransaction() forwards a caller-supplied idempotencyKey', async () => {
+    await bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, idempotencyKey: 'order-42.retry' })
+    expect((wallet.calls[0]!.params as { idempotencyKey: string }).idempotencyKey).toBe('order-42.retry')
   })
 
   it('sendTransaction() sweep omits amount', async () => {
     await bdx.sendTransaction({ to: MOCK_ADDRESS, sweep: true })
-    expect(wallet.calls[0]!.params).toEqual({ to: MOCK_ADDRESS, sweep: true })
+    expect(wallet.calls[0]!.params).toMatchObject({ to: MOCK_ADDRESS, sweep: true })
+    expect(wallet.calls[0]!.params).not.toHaveProperty('amount')
   })
 
   it('signMessage / verifyMessage', async () => {
@@ -65,30 +73,83 @@ describe('methods — happy paths', () => {
     expect(await bdx.verifyMessage({ message: 'hello', address: s.address, signature: s.signature })).toBe(true)
   })
 
-  it('connectWithProof() signs <address>:<nonce>:<timestamp>', async () => {
+  it('connectWithProof() gets a wallet-composed beldex-auth-v1 statement via bdx_signAuthChallenge', async () => {
     const r = await bdx.connectWithProof()
     expect(r.address).toBe(MOCK_ADDRESS)
-    expect(r.proof).not.toBeNull()
     const p = r.proof!
     expect(p.signature).toBe('SigV1mockmockmock')
-    expect(p.nonce).toMatch(/^[0-9a-f]{32}$/)
-    expect(p.message).toBe(buildAuthChallenge(MOCK_ADDRESS, p.nonce, p.timestamp))
-    // the exact challenge went over the wire
-    const signCall = wallet.calls.find(c => c.method === 'bdx_signMessage')!
-    expect(signCall.params).toEqual({ message: p.message })
-    // fresh timestamp
-    expect(Math.abs(Date.now() - p.timestamp)).toBeLessThan(5_000)
+    expect(p.nonce).toMatch(/^[0-9a-f]{32}$/)   // self-generated
+    expect(p.serverIssued).toBe(false)
+    expect(p.domain).toBe(globalThis.location.origin) // wallet-observed origin
+    // message round-trips through the parser with the audience baked in
+    const f = parseAuthChallenge(p.message)!
+    expect(f).toMatchObject({
+      domain: globalThis.location.origin, address: MOCK_ADDRESS,
+      network: 'mainnet', nonce: p.nonce, issuedAt: p.issuedAt,
+      expirationTime: p.expirationTime
+    })
+    expect(p.message).toBe(buildAuthChallenge(f))
+    // the wallet composed the statement — the page only sent the challenge
+    const sign = wallet.calls.find(c => c.method === 'bdx_signAuthChallenge')!
+    expect(sign.params).toEqual({ nonce: p.nonce, expiresInMs: 300_000 })
+    expect(wallet.calls.some(c => c.method === 'bdx_signMessage')).toBe(false)
+    expect(Math.abs(Date.now() - p.issuedAt)).toBeLessThan(5_000)
+    expect(p.expirationTime - p.issuedAt).toBe(300_000)
+  })
+
+  it('signMessage refuses the reserved beldex-auth-v1 prefix (no forged auth statements)', async () => {
+    for (const m of ['beldex-auth-v1 domain=https://evil.example x', '  beldex-auth-v1 y']) {
+      await expect(bdx.signMessage(m)).rejects.toMatchObject({ code: ERROR_CODES.INVALID_PARAMS })
+    }
+    expect(wallet.calls).toHaveLength(0)
+  })
+
+  it('connectWithProof() on a pre-v1.2 wallet fails clearly (and disconnects)', async () => {
+    delete (wallet.handlers as Record<string, unknown>).bdx_signAuthChallenge
+    await expect(bdx.connectWithProof()).rejects.toMatchObject({ code: ERROR_CODES.METHOD_NOT_FOUND })
+    expect(wallet.calls.some(c => c.method === 'bdx_disconnect')).toBe(true)
+  })
+
+  it('connectWithProof() rejects an inconsistent wallet statement', async () => {
+    wallet.handlers.bdx_signAuthChallenge = () => ({
+      message: 'beldex-auth-v1 domain=x uri=x address=other network=mainnet nonce=deadbeef iat=1 exp=2',
+      signature: 'SigV1mockmockmock', address: MOCK_ADDRESS
+    })
+    await expect(bdx.connectWithProof()).rejects.toMatchObject({ code: ERROR_CODES.INTERNAL })
+  })
+
+  it('connectWithProof({challenge}) forwards the server nonce and requestId to the wallet', async () => {
+    const r = await bdx.connectWithProof({
+      challenge: { nonce: 'srv-nonce-01.abc', requestId: 'req-77', expiresInMs: 60_000 }
+    })
+    const p = r.proof!
+    expect(p.serverIssued).toBe(true)
+    expect(p.nonce).toBe('srv-nonce-01.abc')
+    expect(p.requestId).toBe('req-77')
+    expect(p.expirationTime - p.issuedAt).toBe(60_000)
+    expect(p.message).toContain('nonce=srv-nonce-01.abc')
+    expect(p.message).toContain('rid=req-77')
+    expect(wallet.calls.find(c => c.method === 'bdx_signAuthChallenge')!.params)
+      .toEqual({ nonce: 'srv-nonce-01.abc', requestId: 'req-77', expiresInMs: 60_000 })
+  })
+
+  it('connectWithProof rejects malformed server nonces before any wire call', async () => {
+    for (const nonce of ['short', 'has space in it', 'evil\nnonce', 'x'.repeat(200)]) {
+      await expect(bdx.connectWithProof({ challenge: { nonce } }))
+        .rejects.toMatchObject({ code: ERROR_CODES.INVALID_PARAMS })
+    }
+    expect(wallet.calls).toHaveLength(0)
   })
 
   it('connectWithProof() rejection → disconnects and throws (default)', async () => {
-    wallet.handlers.bdx_signMessage = () => { throw new RpcHandlerError(4001, 'rejected') }
+    wallet.handlers.bdx_signAuthChallenge = () => { throw new RpcHandlerError(4001, 'rejected') }
     await expect(bdx.connectWithProof()).rejects.toMatchObject({ code: 4001 })
     expect(wallet.calls.some(c => c.method === 'bdx_disconnect')).toBe(true)
     expect(bdx.isConnected).toBe(false)
   })
 
   it('connectWithProof({required:false}) rejection → connected, proof null', async () => {
-    wallet.handlers.bdx_signMessage = () => { throw new RpcHandlerError(4001, 'rejected') }
+    wallet.handlers.bdx_signAuthChallenge = () => { throw new RpcHandlerError(4001, 'rejected') }
     const r = await bdx.connectWithProof({ required: false })
     expect(r.proof).toBeNull()
     expect(bdx.isConnected).toBe(true)
@@ -106,6 +167,99 @@ describe('methods — happy paths', () => {
   })
 })
 
+describe('send operation recovery (audit: unknown outcome ≠ safe retry)', () => {
+  const hang = () => new Promise(() => {}) // never answers
+
+  it('deadline actually aborts the underlying call (signal wired through)', async () => {
+    let seen: AbortSignal | undefined
+    const provider = {
+      isBeldex: true as const,
+      request: (a: { signal?: AbortSignal }) => { seen = a.signal; return new Promise<never>(() => {}) },
+      on: () => {}, off: () => {}
+    }
+    const fast = new BeldexWeb3(provider, { readTimeoutMs: 30 })
+    await expect(fast.getBalance()).rejects.toMatchObject({ code: ERROR_CODES.REQUEST_EXPIRED })
+    expect(seen).toBeDefined()
+    expect(seen!.aborted).toBe(true) // cancelled, not merely abandoned
+  })
+
+  it('send timeout → UNKNOWN_OUTCOME (4998); read timeout stays 4999', async () => {
+    const fast = new BeldexWeb3(wallet.provider, { approvalTimeoutMs: 30, readTimeoutMs: 30 })
+    wallet.handlers.bdx_sendTransaction = hang
+    wallet.handlers.bdx_getBalance = hang
+    await expect(fast.sendTransaction({ to: MOCK_ADDRESS, amount: 1n }))
+      .rejects.toMatchObject({ code: ERROR_CODES.UNKNOWN_OUTCOME })
+    await expect(fast.getBalance())
+      .rejects.toMatchObject({ code: ERROR_CODES.REQUEST_EXPIRED })
+  })
+
+  it('getOperationStatus decodes all four states', async () => {
+    const states = [
+      { status: 'executing', operationId: 'op-1' },
+      { status: 'confirmed', operationId: 'op-1', txHash: MOCK_TXHASH, fee: '5' },
+      { status: 'failed', operationId: 'op-1' },
+      { status: 'unknown' }
+    ] as const
+    for (const s of states) {
+      wallet.handlers.bdx_getOperationStatus = () => s
+      expect(await bdx.getOperationStatus('op-1')).toEqual(s)
+    }
+    expect(wallet.calls.every(c => c.method === 'bdx_getOperationStatus')).toBe(true)
+  })
+
+  it('sendTransactionSafe resolves a timed-out send via idempotent replay — one payment', async () => {
+    const fast = new BeldexWeb3(wallet.provider, { approvalTimeoutMs: 30 })
+    let approvals = 0
+    const seenKeys = new Set<string>()
+    wallet.handlers.bdx_sendTransaction = (p) => {
+      const key = (p as { idempotencyKey: string }).idempotencyKey
+      seenKeys.add(key)
+      if (approvals === 0) { approvals++; return hang() }      // 1st: approved+executing, reply lost
+      // retry with same key: wallet replays the recorded outcome, no 2nd approval
+      return { txHash: MOCK_TXHASH, fee: '5', operationId: 'op-9', idempotent: true }
+    }
+    const r = await fast.sendTransactionSafe(
+      { to: MOCK_ADDRESS, amount: 1n },
+      { resolveTimeoutMs: 2_000, pollIntervalMs: 10 }
+    )
+    expect(r).toMatchObject({ status: 'confirmed', txHash: MOCK_TXHASH, idempotent: true, operationId: 'op-9' })
+    expect(approvals).toBe(1)        // exactly one approved transaction
+    expect(seenKeys.size).toBe(1)    // every attempt reused the same key
+  })
+
+  it('sendTransactionSafe waits out "already in progress" then surfaces the confirmation', async () => {
+    let calls = 0
+    wallet.handlers.bdx_sendTransaction = () => {
+      calls++
+      if (calls <= 2) throw new RpcHandlerError(-32603, 'a transaction for this idempotency key is already in progress')
+      return { txHash: MOCK_TXHASH, fee: '5', operationId: 'op-3', idempotent: true }
+    }
+    const r = await bdx.sendTransactionSafe(
+      { to: MOCK_ADDRESS, amount: 1n, idempotencyKey: 'resume-key-1' },
+      { resolveTimeoutMs: 2_000, pollIntervalMs: 5 }
+    )
+    expect(r.status).toBe('confirmed')
+    expect(calls).toBe(3)
+  })
+
+  it('sendTransactionSafe returns unresolved (with the key) when the outcome stays unknown', async () => {
+    const fast = new BeldexWeb3(wallet.provider, { approvalTimeoutMs: 20 })
+    wallet.handlers.bdx_sendTransaction = hang
+    const r = await fast.sendTransactionSafe(
+      { to: MOCK_ADDRESS, amount: 1n, idempotencyKey: 'resume-key-2' },
+      { resolveTimeoutMs: 150, pollIntervalMs: 10 }
+    )
+    expect(r).toEqual({ status: 'unresolved', idempotencyKey: 'resume-key-2' })
+  })
+
+  it('sendTransactionSafe rethrows terminal errors (user rejection)', async () => {
+    wallet.handlers.bdx_sendTransaction = () => { throw new RpcHandlerError(4001, 'rejected') }
+    await expect(bdx.sendTransactionSafe({ to: MOCK_ADDRESS, amount: 1n }))
+      .rejects.toMatchObject({ code: 4001 })
+    expect(wallet.calls).toHaveLength(1) // no retry storm on a real "no"
+  })
+})
+
 describe('client-side validation (-32602 before any wire call)', () => {
   const cases: Array<[string, () => Promise<unknown>]> = [
     ['bad address', () => bdx.sendTransaction({ to: 'garbage', amount: 1n })],
@@ -114,10 +268,15 @@ describe('client-side validation (-32602 before any wire call)', () => {
     ['sweep+amount', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, sweep: true })],
     ['bad priority', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, priority: 9 as never })],
     ['bad paymentId', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, paymentId: 'xyz' })],
+    ['bad idempotencyKey', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, idempotencyKey: 'has spaces!' })],
+    ['empty operationId', () => bdx.getOperationStatus('')],
     ['fractional amount string', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: '1.5' })],
     ['empty message', () => bdx.signMessage('')],
     ['control chars in message', () => bdx.signMessage('line1\nline2')],
     ['NUL in message', () => bdx.signMessage('a\x00b')],
+    ['invisible unicode in message (RLO)', () => bdx.signMessage('pay 1\u202eBDX')],
+    ['variation selector in message', () => bdx.signMessage('ok\ufe0f')],
+    ['oversize message (513)', () => bdx.signMessage('x'.repeat(513))],
     ['empty bns name', () => bdx.resolveBns('  ')]
   ]
   for (const [name, fn] of cases) {

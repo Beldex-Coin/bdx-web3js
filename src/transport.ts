@@ -72,17 +72,35 @@ export class PostMessageProvider implements BeldexProvider {
     this.win.addEventListener('message', this.onMessage)
   }
 
-  request(args: { method: BdxMethod; params?: object }): Promise<unknown> {
+  request(args: { method: BdxMethod; params?: object; signal?: AbortSignal }): Promise<unknown> {
     if (this.destroyed) {
       return Promise.reject(new BdxRpcError(ERROR_CODES.INTERNAL, 'provider destroyed'))
     }
+    if (args.signal?.aborted) {
+      return Promise.reject(new BdxRpcError(ERROR_CODES.REQUEST_EXPIRED, 'request aborted'))
+    }
     const id = uuid()
     return new Promise<unknown>((resolve, reject) => {
+      // True cancellation: the caller's deadline abort drops the pending entry,
+      // so a late wallet response to this id is ignored (stale-id rule).
+      const onAbort = () => {
+        const p = this.pending.get(id)
+        if (!p) return
+        this.pending.delete(id)
+        clearTimeout(p.timer)
+        reject(new BdxRpcError(ERROR_CODES.REQUEST_EXPIRED, 'request aborted'))
+      }
+      const settleWrap = <A>(fn: (v: A) => void) => (v: A) => {
+        args.signal?.removeEventListener('abort', onAbort)
+        fn(v)
+      }
+      args.signal?.addEventListener('abort', onAbort, { once: true })
       const timer = setTimeout(() => {
         this.pending.delete(id)
+        args.signal?.removeEventListener('abort', onAbort)
         reject(new BdxRpcError(ERROR_CODES.REQUEST_EXPIRED, 'Request timed out'))
       }, this.timeoutMs)
-      this.pending.set(id, { resolve, reject, timer })
+      this.pending.set(id, { resolve: settleWrap(resolve), reject: settleWrap(reject), timer })
       this.win.postMessage(
         { target: REQUEST_TARGET, id, method: args.method, ...(args.params !== undefined ? { params: args.params } : {}) },
         '*'
