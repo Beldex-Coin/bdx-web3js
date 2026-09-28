@@ -1,23 +1,55 @@
 {
-  "name": "bdx-web3js",
-  "version": "0.1.0",
+  "name": "@bdxi/web3js",
+  "version": "1.0.0",
   "description": "Typed SDK for connecting web apps to the Beldex Wallet browser extension — connect, balances, and user-approved transactions.",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Beldex-Coin/bdx-web3js.git"
+  },
+  "homepage": "https://github.com/Beldex-Coin/bdx-web3js#readme",
+  "bugs": {
+    "url": "https://github.com/Beldex-Coin/bdx-web3js/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "sideEffects": false,
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./react": {
-      "types": "./dist/react.d.ts",
-      "import": "./dist/react.js",
-      "require": "./dist/react.cjs"
+      "import": {
+        "types": "./dist/react.d.ts",
+        "default": "./dist/react.js"
+      },
+      "require": {
+        "types": "./dist/react.d.cts",
+        "default": "./dist/react.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "react": [
+        "./dist/react.d.ts"
+      ]
     }
   },
   "peerDependencies": {
@@ -39,7 +71,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "node e2e/run.mjs"
+    "e2e": "node e2e/run.mjs",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "keywords": [
     "beldex",

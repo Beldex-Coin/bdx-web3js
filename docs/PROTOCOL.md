@@ -4,7 +4,7 @@
 
 This document is the **single source of truth** for the wire protocol between:
 
-- the **SDK** — the `bdx-web3js` npm package running in a web page, and
+- the **SDK** — the `@bdxi/web3js` npm package running in a web page, and
 - the **Wallet** — the Beldex Wallet Extension's dapp bridge (inpage script, content script, background router, approval UI).
 
 Both implementations MUST conform to this document. A change needed by either side MUST be made here first. The key words MUST, MUST NOT, SHOULD, and MAY are to be interpreted as in RFC 2119.

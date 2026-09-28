@@ -1,6 +1,6 @@
 # bdx-web3js React demo
 
-Minimal Vite + React app showing the `bdx-web3js/react` bindings: `BeldexProvider`, `ConnectButton`, and the `useConnect` / `useBalance` hooks with live balance polling.
+Minimal Vite + React app showing the `@bdxi/web3js/react` bindings: `BeldexProvider`, `ConnectButton`, and the `useConnect` / `useBalance` hooks with live balance polling.
 
 ## Prerequisites
 

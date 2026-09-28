@@ -7,7 +7,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "bdx-web3js": "file:../..",
+    "@bdxi/web3js": "file:../..",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

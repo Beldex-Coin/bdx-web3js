@@ -9,7 +9,7 @@ Zero runtime dependencies. ESM + CJS + browser global builds. Amounts are BigInt
 ## Install
 
 ```bash
-npm install bdx-web3js
+npm install @bdxi/web3js
 ```
 
 Or as a browser global: `<script src="…/bdx-web3.global.js"></script>` → `window.BdxWeb3`.
@@ -17,7 +17,7 @@ Or as a browser global: `<script src="…/bdx-web3.global.js"></script>` → `wi
 ## Quickstart
 
 ```ts
-import { BeldexWeb3, detectProvider, toAtomic, fromAtomic } from 'bdx-web3js'
+import { BeldexWeb3, detectProvider, toAtomic, fromAtomic } from '@bdxi/web3js'
 
 const provider = await detectProvider({ timeoutMs: 3000 })
 if (!provider) {
@@ -157,7 +157,7 @@ Beldex is a private-by-default (Monero-family) chain, so this SDK is payments-or
 ## React
 
 ```tsx
-import { BeldexProvider, ConnectButton, useConnect, useBalance, fromAtomic } from 'bdx-web3js/react'
+import { BeldexProvider, ConnectButton, useConnect, useBalance, fromAtomic } from '@bdxi/web3js/react'
 
 function App() {
   return (

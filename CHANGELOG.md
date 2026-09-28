@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.0.0 — 2026-09-29
+
+First public release on npm as `@bdxi/web3js` (previously `bdx-web3js`).
+
+### Changed
+- Package renamed to `@bdxi/web3js`; import paths are now `@bdxi/web3js` and `@bdxi/web3js/react`.
+- `exports` map now ships CommonJS type declarations (`.d.cts`) so `require()` consumers get correct types.
+- Added MIT `LICENSE` file, `repository`/`homepage`/`bugs` metadata, and `prepublishOnly` (typecheck + test + build) guard.
+
 ### Added
 - `signMessage` / `verifyMessage` are live: the reference wallet (extension v1.1)
   implements `bdx_signMessage` (approval-gated, SigV1 `wallet2::sign` scheme, spend
@@ -122,7 +131,7 @@ First release. Protocol v1 (see `docs/PROTOCOL.md`).
   helpers (`isUserRejection`, `isLocked`, `isUnauthorized`, `isExpired`).
 - Utilities: `toAtomic` / `fromAtomic` / `parseAtomic` (BigInt-exact, 1 BDX = 1e9),
   `checkAddress` (format-only shape validation).
-- React bindings at `bdx-web3js/react`: `BeldexProvider`, `useBeldex`, `useConnect`,
+- React bindings at `@bdxi/web3js/react`: `BeldexProvider`, `useBeldex`, `useConnect`,
   `useBalance`, `<ConnectButton/>` (react >=18 optional peer dependency).
 - Builds: ESM + CJS + IIFE (`window.BdxWeb3`) + type declarations.
 - Examples: `examples/vanilla.html` (inline mock wallet, yields to the real extension),
