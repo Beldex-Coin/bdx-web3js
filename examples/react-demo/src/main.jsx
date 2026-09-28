@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BeldexProvider, ConnectButton, useBeldex, useConnect, useBalance, useSignMessage, fromAtomic } from 'bdx-web3js/react'
-import { toAtomic, BdxRpcError, parseAuthChallenge, validateSigningText } from 'bdx-web3js'
+import { BeldexProvider, ConnectButton, useBeldex, useConnect, useBalance, useSignMessage, fromAtomic } from '@bdxi/web3js/react'
+import { toAtomic, BdxRpcError, parseAuthChallenge, validateSigningText } from '@bdxi/web3js'
 
 // Reserved for wallet-composed auth statements (bdx_signAuthChallenge) —
 // the SDK and the wallet both refuse it in generic message signing.
