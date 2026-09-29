@@ -1,6 +1,6 @@
 {
   "name": "@bdxi/web3js",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Typed SDK for connecting web apps to the Beldex Wallet browser extension — connect, balances, and user-approved transactions.",
   "license": "MIT",
   "type": "module",

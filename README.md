@@ -4,8 +4,6 @@ Typed SDK for connecting web apps to the **Beldex Wallet** browser extension —
 
 Zero runtime dependencies. ESM + CJS + browser global builds. Amounts are BigInt end-to-end (1 BDX = 10⁹ atomic units — floats are never trusted).
 
-> Protocol spec: [`PROTOCOL.md`](./PROTOCOL.md) · Roadmap: [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md)
-
 ## Install
 
 ```bash
