@@ -63,7 +63,7 @@ function DisconnectButton() {
 }
 
 function Address() {
-  const { bdx } = useBeldex()
+  const { bdx, network } = useBeldex()
   const { address, proof } = useConnect()
   const [auth, setAuth] = useState(null) // null | { ok, why? }
 
@@ -79,9 +79,21 @@ function Address() {
   return (
     <div style={{ fontSize: 12 }}>
       <p>
+        {network && (
+          <span style={{
+            background: network === 'testnet' ? '#b58900' : '#1d3a1f',
+            color: network === 'testnet' ? '#000' : '#3EC745',
+            padding: '2px 8px', marginRight: 8, fontSize: 11, fontWeight: 700
+          }}>
+            {network.toUpperCase()}
+          </span>
+        )}
         Address:{' '}
         <span style={{ color: '#3EC745', wordBreak: 'break-all' }}>{address}</span>
       </p>
+      {network === 'testnet' && (
+        <p style={{ color: '#b58900' }}>Testnet — coins have no value; addresses start with 9/A/B.</p>
+      )}
       {proof && (
         <p style={{ wordBreak: 'break-all' }}>
           ✓ wallet-composed statement signed on connect ({proof.serverIssued ? 'server-issued nonce' : 'self-nonced — not for login'},

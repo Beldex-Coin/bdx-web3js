@@ -121,6 +121,7 @@ export class BeldexWeb3 {
   private readonly readTimeoutMs: number
   private readonly approvalTimeoutMs: number
   private cachedAddress: string | null = null
+  private cachedNetwork: Nettype | null = null
   /** Our listeners keyed by event, mapping user fn → wrapped fn (for off()). */
   private readonly subs = new Map<BdxEvent, Map<(data: never) => void, (data: unknown) => void>>()
 
@@ -137,9 +138,15 @@ export class BeldexWeb3 {
       this.cachedAddress = (data as AccountsChangedEventData | undefined)?.address ?? null
     })
     provider.on('disconnect', () => { this.cachedAddress = null })
+    provider.on('networkChanged', data => {
+      const n = (data as { nettype?: unknown } | undefined)?.nettype
+      if (n === 'mainnet' || n === 'testnet') this.cachedNetwork = n
+    })
     provider.on('connect', data => {
       const d = data as ConnectEventData | undefined
       if (d && typeof d.address === 'string') this.cachedAddress = d.address
+      const n = (d as { network?: unknown } | undefined)?.network
+      if (n === 'mainnet' || n === 'testnet') this.cachedNetwork = n
     })
   }
 
@@ -191,6 +198,7 @@ export class BeldexWeb3 {
   async connect(): Promise<ConnectResult> {
     const r = await this.request<ConnectResult>('bdx_connect')
     this.cachedAddress = r.address
+    this.cachedNetwork = r.network
     return r
   }
 
@@ -276,6 +284,11 @@ export class BeldexWeb3 {
     return this.cachedAddress
   }
 
+  /** Network from the last connect()/networkChanged, without a round-trip. */
+  get network(): Nettype | null {
+    return this.cachedNetwork
+  }
+
   get isConnected(): boolean {
     return this.cachedAddress !== null
   }
@@ -312,7 +325,9 @@ export class BeldexWeb3 {
     // never create a second approved payment. Older wallets ignore the field.
     idempotencyKey ??= randomNonceHex()
 
-    const addr = checkAddress(to)
+    // Cross-network sends can't succeed: with the wallet's network known,
+    // reject a wrong-chain address before it reaches the approval flow.
+    const addr = checkAddress(to, this.cachedNetwork ?? undefined)
     if (!addr.valid) {
       throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, `invalid "to" address: ${addr.reason}`)
     }
@@ -450,7 +465,9 @@ export class BeldexWeb3 {
   }
 
   async getNetwork(): Promise<GetNetworkResult> {
-    return this.request<GetNetworkResult>('bdx_getNetwork')
+    const r = await this.request<GetNetworkResult>('bdx_getNetwork')
+    this.cachedNetwork = r.nettype
+    return r
   }
 
   async getState(): Promise<WalletState> {

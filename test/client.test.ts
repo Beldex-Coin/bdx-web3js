@@ -165,6 +165,30 @@ describe('methods — happy paths', () => {
     expect((await bdx.getNetwork()).protocolVersion).toBe(1)
     expect(await bdx.getState()).toBe('unlocked')
   })
+
+  it('tracks the wallet network and rejects cross-network sends', async () => {
+    expect(bdx.network).toBeNull()
+    // Network unknown → shape-valid addresses of either chain pass client-side
+    const testnetAddr = '9' + 'V'.repeat(94)
+    await bdx.sendTransaction({ to: testnetAddr, amount: 1n })
+
+    await bdx.connect() // mock wallet reports mainnet
+    expect(bdx.network).toBe('mainnet')
+    const before = wallet.calls.length
+    await expect(bdx.sendTransaction({ to: testnetAddr, amount: 1n }))
+      .rejects.toMatchObject({ code: ERROR_CODES.INVALID_PARAMS })
+    expect(wallet.calls).toHaveLength(before) // rejected before the wire
+    await bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n }) // same-chain still fine
+  })
+
+  it('networkChanged updates the cached network', async () => {
+    await bdx.connect()
+    wallet.emit('networkChanged', { nettype: 'testnet' })
+    await new Promise(r => setTimeout(r, 5))
+    expect(bdx.network).toBe('testnet')
+    await expect(bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n }))
+      .rejects.toMatchObject({ code: ERROR_CODES.INVALID_PARAMS }) // mainnet addr on testnet
+  })
 })
 
 describe('send operation recovery (audit: unknown outcome ≠ safe retry)', () => {

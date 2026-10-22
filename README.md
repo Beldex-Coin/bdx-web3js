@@ -138,10 +138,12 @@ if (r.status === 'confirmed') {
 ```ts
 toAtomic('1.25')            // 1250000000n  (display BDX → atomic)
 fromAtomic(1250000000n)     // '1.25'       (atomic → display BDX)
-checkAddress('bx…')         // { valid, kind: 'standard' | 'integrated', reason? }
+checkAddress('bx…')              // { valid, kind: 'standard' | 'integrated', network: 'mainnet', reason? }
+checkAddress('9…', 'testnet')    // testnet shapes ('9…'/'A…'/'B…') supported; second arg
+                                 // enforces the expected chain (cross-network ⇒ invalid)
 ```
 
-`checkAddress` validates **shape only** (base58, `bx` prefix, length) — the wallet fully re-validates every address before signing.
+`checkAddress` validates **shape only** (base58, network prefix, length) — the wallet fully re-validates every address before signing. The client tracks the wallet's network after `connect()`/`getNetwork()` (exposed as `bdx.network`) and rejects cross-network `sendTransaction` addresses before they reach the approval flow. Testnet works end to end: connect to a testnet-configured wallet and `network: 'testnet'` flows through connect results, auth statements (`network=testnet`), events, and address validation.
 
 ## What a dapp can and cannot do
 

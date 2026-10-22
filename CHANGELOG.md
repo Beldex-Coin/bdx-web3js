@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+- Testnet support: `checkAddress()` recognizes testnet address shapes
+  (`9…`/`A…`/`B…`, consensus prefixes 53/54) alongside mainnet `bx…`, reports
+  the detected `network`, and takes an optional expected-network argument. The
+  client caches the wallet's network (`bdx.network`, kept fresh from
+  connect/getNetwork/networkChanged) and rejects cross-network
+  `sendTransaction` addresses before dispatch. The react-demo shows a network
+  badge and a testnet notice.
+
 ## 1.0.0 — 2026-09-29
 
 First public release on npm as `@bdxi/web3js` (previously `bdx-web3js`).
