@@ -1,7 +1,7 @@
 {
   "name": "@bdxi/web3js",
   "version": "1.0.1",
-  "description": "Typed SDK for connecting web apps to the Beldex Wallet browser extension — connect, balances, and user-approved transactions.",
+  "description": "Typed SDK for connecting web apps to the Beldex Wallet browser extension \u2014 connect, balances, and user-approved transactions.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -92,6 +92,9 @@
     "react-dom": "^18.2.0",
     "tsup": "^8.0.0",
     "typescript": "^5.4.0",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.5"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1"
   }
 }
