@@ -66,3 +66,53 @@ export function parseAtomic(value: string): bigint {
   if (!/^\d+$/.test(value)) throw new RangeError(`invalid atomic amount: "${value}"`)
   return BigInt(value)
 }
+
+// ------------------------------------------------------------ HF22 tokens ----
+// Privacy tokens carry their own decimal_point (0–18 observed range guard).
+// Same BigInt-exact rules as BDX, parameterized by the token's decimals.
+
+function checkDecimals(decimalPoint: number): number {
+  if (!Number.isInteger(decimalPoint) || decimalPoint < 0 || decimalPoint > 18) {
+    throw new RangeError(`invalid token decimalPoint: ${decimalPoint}`)
+  }
+  return decimalPoint
+}
+
+/** Display token amount ("1.25") → the token's atomic units (bigint).
+ *  `decimalPoint` comes from getTokenInfo()/getTokenBalance() — never trust a
+ *  page-supplied value for display. */
+export function toTokenAtomic(value: string | number | bigint, decimalPoint: number): bigint {
+  const d = checkDecimals(decimalPoint)
+  const scale = 10n ** BigInt(d)
+  if (typeof value === 'bigint') {
+    if (value < 0n) throw new RangeError('amount must not be negative')
+    return value * scale
+  }
+  let s: string
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value < 0) throw new RangeError('amount must be finite and non-negative')
+    if (value > Number.MAX_SAFE_INTEGER) throw new RangeError('amount too large for a number — pass a string')
+    s = value.toString()
+    if (/[eE]/.test(s)) throw new RangeError('amount not exactly representable — pass a string')
+  } else {
+    s = value.trim()
+  }
+  const m = DECIMAL_RE.exec(s)
+  if (!m) throw new RangeError(`invalid token amount: "${s}"`)
+  const frac = m[2] ?? ''
+  if (frac.length > d) {
+    throw new RangeError(`token supports at most ${d} decimal places (got "${s}")`)
+  }
+  return BigInt(m[1]!) * scale + BigInt(frac.padEnd(d, '0') || '0')
+}
+
+/** Token atomic units → display string, exact, trailing zeros trimmed. */
+export function fromTokenAtomic(value: bigint | string, decimalPoint: number): string {
+  const d = checkDecimals(decimalPoint)
+  const v = typeof value === 'string' ? parseAtomic(value) : value
+  if (v < 0n) throw new RangeError('amount must not be negative')
+  if (d === 0) return v.toString()
+  const scale = 10n ** BigInt(d)
+  const frac = (v % scale).toString().padStart(d, '0').replace(/0+$/, '')
+  return frac ? `${v / scale}.${frac}` : (v / scale).toString()
+}

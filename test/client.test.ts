@@ -155,6 +155,27 @@ describe('methods — happy paths', () => {
     expect(bdx.isConnected).toBe(true)
   })
 
+  it('getTokenBalance parses token atomic amounts to BigInt', async () => {
+    const b = await bdx.getTokenBalance('a'.repeat(64))
+    expect(b).toMatchObject({ status: 'confirmed', ticker: 'MOCK', decimalPoint: 6, height: 3_500_000 })
+    expect(b.total).toBe(5_000_000n)
+    expect(b.unlocked).toBe(4_000_000n)
+    expect(b.locked).toBe(1_000_000n)
+    expect(wallet.calls[0]!.params).toEqual({ tokenId: 'a'.repeat(64) })
+  })
+
+  it('getTokenInfo returns the descriptor', async () => {
+    const i = await bdx.getTokenInfo('deadbeef01')
+    expect(i).toMatchObject({ ticker: 'MOCK', name: 'Mock Token', decimalPoint: 6 })
+  })
+
+  it('sendTransaction forwards tokenId; token sweep rejected', async () => {
+    await bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 123n, tokenId: 'deadbeef01' })
+    expect(wallet.calls[0]!.params).toMatchObject({ tokenId: 'deadbeef01', amount: '123' })
+    await expect(bdx.sendTransaction({ to: MOCK_ADDRESS, sweep: true, tokenId: 'deadbeef01' }))
+      .rejects.toMatchObject({ code: ERROR_CODES.INVALID_PARAMS })
+  })
+
   it('resolveBns trims input', async () => {
     const r = await bdx.resolveBns('  shop.bdx  ')
     expect(r.address).toBe(MOCK_ADDRESS)
@@ -294,6 +315,9 @@ describe('client-side validation (-32602 before any wire call)', () => {
     ['bad paymentId', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, paymentId: 'xyz' })],
     ['bad idempotencyKey', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, idempotencyKey: 'has spaces!' })],
     ['empty operationId', () => bdx.getOperationStatus('')],
+    ['bad tokenId chars', () => bdx.getTokenBalance('not/hex!')],
+    ['oversize tokenId', () => bdx.getTokenInfo('a'.repeat(65))],
+    ['bad tokenId on send', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: 1n, tokenId: 'has space' })],
     ['fractional amount string', () => bdx.sendTransaction({ to: MOCK_ADDRESS, amount: '1.5' })],
     ['empty message', () => bdx.signMessage('')],
     ['control chars in message', () => bdx.signMessage('line1\nline2')],

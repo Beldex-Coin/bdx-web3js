@@ -10,7 +10,8 @@ import type {
   AccountsChangedEventData, Balance, BdxEvent, BdxMethod, BeldexProvider,
   AuthChallenge, ConnectEventData, ConnectProof, ConnectResult,
   ConnectWithProofResult, GetAddressResult, GetBalanceResult, Nettype,
-  OperationStatus, SafeSendResult, SignAuthChallengeParams, SignAuthChallengeResult,
+  GetTokenBalanceResult, OperationStatus, SafeSendResult,
+  SignAuthChallengeParams, SignAuthChallengeResult, TokenBalance, TokenInfo,
   GetNetworkResult, GetStateResult, ResolveBnsResult, SendTransactionParams,
   SendTransactionResult, SignMessageResult, VerifyMessageParams,
   VerifyMessageResult, WalletState
@@ -31,6 +32,8 @@ const APPROVAL_METHODS: ReadonlySet<BdxMethod> = new Set([
 const MUTATING_METHODS: ReadonlySet<BdxMethod> = new Set(['bdx_sendTransaction'])
 
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9._-]{8,128}$/
+/** HF22 token ids are opaque — bounded + wire-safe is all the SDK asserts. */
+const TOKEN_ID_RE = /^[A-Za-z0-9]{1,64}$/
 
 // ------------------------------------------------------------- auth proof ----
 // Single-line on purpose: the wallet rejects control characters (incl. \n),
@@ -311,12 +314,46 @@ export class BeldexWeb3 {
   }
 
   /**
+   * HF22 privacy-token balance for the connected wallet (grant required;
+   * wallet v1.3+ on an HF22 chain — testnet today). Amounts are BigInt in the
+   * TOKEN's atomic units; `decimalPoint`/`ticker` present when the chain
+   * confirms the token.
+   */
+  async getTokenBalance(tokenId: string): Promise<TokenBalance> {
+    if (typeof tokenId !== 'string' || !TOKEN_ID_RE.test(tokenId)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'tokenId must be 1–64 chars of A-Za-z0-9')
+    }
+    const r = await this.request<GetTokenBalanceResult>('bdx_getTokenBalance', { tokenId })
+    return {
+      ...r,
+      total: parseAtomic(r.total),
+      unlocked: parseAtomic(r.unlocked),
+      locked: parseAtomic(r.locked)
+    }
+  }
+
+  /** Public descriptor of an HF22 token (ticker, decimals, supply, owner).
+   *  Use `decimalPoint` with toTokenAtomic()/fromTokenAtomic() for amounts. */
+  async getTokenInfo(tokenId: string): Promise<TokenInfo> {
+    if (typeof tokenId !== 'string' || !TOKEN_ID_RE.test(tokenId)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'tokenId must be 1–64 chars of A-Za-z0-9')
+    }
+    return this.request<TokenInfo>('bdx_getTokenInfo', { tokenId })
+  }
+
+  /**
    * Ask the wallet to send BDX. The user approves (or rejects — error 4001)
    * in the wallet's own window. `amount` is atomic units: bigint, or an
    * integer string; use toAtomic('1.25') to convert display BDX.
    */
   async sendTransaction(params: SendTransactionParams): Promise<SendTransactionResult> {
-    const { to, amount, priority, paymentId, sweep } = params
+    const { to, amount, priority, paymentId, sweep, tokenId } = params
+    if (tokenId !== undefined && !TOKEN_ID_RE.test(tokenId)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'tokenId must be 1–64 chars of A-Za-z0-9')
+    }
+    if (tokenId !== undefined && sweep) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'sweep is not supported for token sends')
+    }
     let idempotencyKey = params.idempotencyKey
     if (idempotencyKey !== undefined && !IDEMPOTENCY_KEY_RE.test(idempotencyKey)) {
       throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'idempotencyKey must be 8–128 chars of A-Za-z0-9._-')
@@ -361,6 +398,7 @@ export class BeldexWeb3 {
       ...(priority !== undefined ? { priority } : {}),
       ...(paymentId !== undefined ? { paymentId } : {}),
       ...(sweep ? { sweep: true } : {}),
+      ...(tokenId !== undefined ? { tokenId } : {}),
       idempotencyKey
     })
   }

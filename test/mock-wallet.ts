@@ -43,6 +43,16 @@ function defaultHandlers(): Record<BdxMethod, Handler> {
       total: '12500000000', unlocked: '10000000000', approximate: true, height: 3_500_000
     }),
     bdx_sendTransaction: () => ({ txHash: MOCK_TXHASH, fee: '22110000', operationId: 'op-1' }),
+    bdx_getTokenBalance: (p) => ({
+      tokenId: (p as { tokenId: string }).tokenId, status: 'confirmed',
+      total: '5000000', unlocked: '4000000', locked: '1000000',
+      height: 3_500_000, ticker: 'MOCK', decimalPoint: 6
+    }),
+    bdx_getTokenInfo: (p) => ({
+      tokenId: (p as { tokenId: string }).tokenId, ticker: 'MOCK', name: 'Mock Token',
+      owner: 'a'.repeat(64), metaInfo: '', currentSupply: '1000000000',
+      totalMaxSupply: '1000000000', decimalPoint: 6
+    }),
     bdx_getOperationStatus: () => ({ status: 'unknown' }),
     bdx_signMessage: () => ({ signature: 'SigV1mockmockmock', address: MOCK_ADDRESS }),
     bdx_signAuthChallenge: (p) => {

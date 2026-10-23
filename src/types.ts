@@ -11,6 +11,8 @@ export const BDX_METHODS = [
   'bdx_disconnect',
   'bdx_getAddress',
   'bdx_getBalance',
+  'bdx_getTokenBalance',
+  'bdx_getTokenInfo',
   'bdx_sendTransaction',
   'bdx_getOperationStatus',
   'bdx_signMessage',
@@ -154,6 +156,14 @@ export interface SendTransactionParams {
    *  the SAME key replays a recorded outcome instead of creating a second
    *  approved payment — keep it if you may need to retry/resume this send. */
   idempotencyKey?: string
+  /** HF22 privacy token id (opaque, ≤64 chars of A-Za-z0-9). When set, the
+   *  whole send is in that token: `amount` is the TOKEN's atomic units (use
+   *  toTokenAtomic with the decimals from getTokenInfo); the network fee stays
+   *  BDX. The wallet derives ticker/decimals itself for the approval card —
+   *  a page can never influence how the amount is displayed. Requires a
+   *  token-capable wallet (v1.3+) and an HF22 chain (testnet today).
+   *  `sweep` is not supported together with tokenId. */
+  tokenId?: string
 }
 
 export interface SendTransactionResult {
@@ -165,6 +175,46 @@ export interface SendTransactionResult {
   /** true when this result was replayed from a prior operation with the same
    *  idempotencyKey (no second approval, no second payment). */
   idempotent?: boolean
+}
+
+export type TokenStatus = 'confirmed' | 'not_found' | 'unknown'
+
+/** Raw wire shape of bdx_getTokenBalance — amounts are strings of the
+ *  token's atomic units. */
+export interface GetTokenBalanceResult {
+  tokenId: string
+  status: TokenStatus
+  total: string
+  unlocked: string
+  locked: string
+  height: number
+  /** Present when status === 'confirmed'. */
+  ticker?: string
+  decimalPoint?: number
+}
+
+/** SDK-facing shape: amounts parsed to BigInt. */
+export interface TokenBalance {
+  tokenId: string
+  status: TokenStatus
+  total: bigint
+  unlocked: bigint
+  locked: bigint
+  height: number
+  ticker?: string
+  decimalPoint?: number
+}
+
+/** bdx_getTokenInfo — public chain data for one HF22 token. */
+export interface TokenInfo {
+  tokenId: string
+  ticker: string
+  name: string
+  owner: string
+  metaInfo: string
+  currentSupply: string
+  totalMaxSupply: string
+  decimalPoint: number
 }
 
 /** Wire/SDK shape of bdx_getOperationStatus (wallet v1.2+). `unknown` =

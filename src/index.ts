@@ -10,7 +10,7 @@ export { PostMessageProvider } from './transport.js'
 export type { PostMessageProviderOptions } from './transport.js'
 export { BdxRpcError, ERROR_CODES, toBdxError } from './errors.js'
 export type { ErrorCode } from './errors.js'
-export { toAtomic, fromAtomic, parseAtomic, ATOMIC_PER_BDX, BDX_DECIMALS } from './units.js'
+export { toAtomic, fromAtomic, parseAtomic, toTokenAtomic, fromTokenAtomic, ATOMIC_PER_BDX, BDX_DECIMALS } from './units.js'
 export { checkAddress, isValidAddressShape } from './address.js'
 export {
   validateSigningText, SIGNING_TEXT_POLICY_VERSION, SIGNING_TEXT_UNICODE_VERSION,

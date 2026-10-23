@@ -92,6 +92,23 @@ await bdx.connectWithProof({ required: false })
 
 Server-side verification checklist: parse with `parseAuthChallenge(message)` (or rebuild via `buildAuthChallenge(fields)` from stored parts), then check **all** of: signature via `bdx_verifyMessage`/CLI `verify_value` · `domain` equals *your* origin · `address` is the claimed account · `network` is the expected chain · `nonce` was issued by you, unused, and consume it atomically · now within `iat`/`exp`. Reject anything that fails a single check. (The statement is single-line by design — the wallet rejects control characters, so multi-line SIWE-style layouts cannot be signed.) `connectWithProof()` obtains the statement via `bdx_signAuthChallenge` (wallet v1.2+ required): the *wallet* composes it from the origin it observes via the browser, so page-side code cannot forge the bound domain — and the reserved `beldex-auth-v1` prefix is rejected in generic `signMessage()`, so an auth statement cannot be forged through raw message signing either. `signAuthChallenge(params)` is also exposed directly for custom flows.
 
+### Privacy tokens (HF22 — live on testnet)
+
+Wallet v1.3+ on an HF22 chain exposes token reads and token sends (token registration stays wallet-panel-only):
+
+```ts
+const info = await bdx.getTokenInfo(tokenId)        // ticker, name, decimalPoint, supply
+const bal  = await bdx.getTokenBalance(tokenId)     // BigInt amounts in TOKEN atomic units
+
+await bdx.sendTransaction({
+  to,
+  tokenId,
+  amount: toTokenAtomic('1.25', info.decimalPoint), // token units, token decimals
+})                                                   // network fee stays BDX
+```
+
+Use `toTokenAtomic`/`fromTokenAtomic` with the `decimalPoint` from `getTokenInfo()` — never a page-supplied value. The wallet resolves ticker/decimals itself for the approval card, so a dapp cannot influence how the approved amount is displayed. `sweep` is not available for token sends; on wallets/LWS without HF22 support the token methods fail cleanly (`-32601`/`-32603`).
+
 ### BNS names
 
 `sendTransaction` accepts only concrete addresses — resolve names first so users approve exactly what gets paid:
@@ -179,7 +196,7 @@ Hooks: `useBeldex()` (full context incl. the raw `BeldexWeb3` client), `useConne
 
 ## API surface
 
-`detectProvider(opts?)` · `new BeldexWeb3(provider, opts?)` · `connect()` · `connectWithProof(opts?)` · `disconnect()` · `getAddress()` · `getBalance()` · `sendTransaction(params)` · `sendTransactionSafe(params, opts?)` · `getOperationStatus(operationId)` · `signMessage(msg)` · `signAuthChallenge(params)` · `verifyMessage(params)` · `resolveBns(name)` · `getNetwork()` · `getState()` · `buildAuthChallenge(address, nonce, ts)` · `on/off/once(event, fn)` · `address` / `isConnected` getters.
+`detectProvider(opts?)` · `new BeldexWeb3(provider, opts?)` · `connect()` · `connectWithProof(opts?)` · `disconnect()` · `getAddress()` · `getBalance()` · `sendTransaction(params)` · `sendTransactionSafe(params, opts?)` · `getOperationStatus(operationId)` · `getTokenBalance(tokenId)` · `getTokenInfo(tokenId)` · `signMessage(msg)` · `signAuthChallenge(params)` · `verifyMessage(params)` · `resolveBns(name)` · `getNetwork()` · `getState()` · `buildAuthChallenge(address, nonce, ts)` · `on/off/once(event, fn)` · `address` / `isConnected` getters.
 
 Events: `connect`, `disconnect`, `accountsChanged`, `networkChanged`, `balanceChanged`, `lock`, `unlock`.
 

@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Added
+- HF22 privacy tokens (wallet v1.3+; live on testnet): `getTokenBalance()` /
+  `getTokenInfo()` (grant-gated reads over the new `bdx_getTokenBalance` /
+  `bdx_getTokenInfo` methods, BigInt token-atomic amounts) and token sends via
+  `sendTransaction({ tokenId, … })` — amount in the token's own atomic units,
+  fee in BDX, sweep disallowed. The wallet resolves ticker/decimals from its
+  own LWS for the approval card (page-supplied display data is never trusted);
+  token registration remains panel-only. `toTokenAtomic`/`fromTokenAtomic`
+  helpers; PROTOCOL.md §4.4a/§4.4b + size-profile rows (conformance-tested);
+  react-demo token card (info, balance, send).
 - Testnet support: `checkAddress()` recognizes testnet address shapes
   (`9…`/`A…`/`B…`, consensus prefixes 53/54) alongside mainnet `bx…`, reports
   the detected `network`, and takes an optional expected-network argument. The

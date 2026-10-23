@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BeldexProvider, ConnectButton, useBeldex, useConnect, useBalance, useSignMessage, fromAtomic } from '@bdxi/web3js/react'
-import { toAtomic, BdxRpcError, parseAuthChallenge, validateSigningText } from '@bdxi/web3js'
+import { toAtomic, toTokenAtomic, fromTokenAtomic, BdxRpcError, parseAuthChallenge, validateSigningText } from '@bdxi/web3js'
 
 // Reserved for wallet-composed auth statements (bdx_signAuthChallenge) —
 // the SDK and the wallet both refuse it in generic message signing.
@@ -209,6 +209,118 @@ function SendForm() {
   )
 }
 
+function TokenCard() {
+  const { bdx, network } = useBeldex()
+  const { isConnected } = useConnect()
+  const [tokenId, setTokenId] = useState('')
+  const [info, setInfo] = useState(null)      // TokenInfo
+  const [balance, setBalance] = useState(null) // TokenBalance
+  const [to, setTo] = useState('')
+  const [amount, setAmount] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState(null)
+
+  if (!isConnected) return null
+
+  const load = async (e) => {
+    e.preventDefault()
+    setError(null); setInfo(null); setBalance(null); setResult(null)
+    setBusy(true)
+    try {
+      const i = await bdx.getTokenInfo(tokenId.trim())
+      setInfo(i)
+      setBalance(await bdx.getTokenBalance(tokenId.trim()))
+    } catch (err) {
+      setError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const send = async () => {
+    setError(null); setResult(null); setBusy(true)
+    try {
+      const r = await bdx.sendTransaction({
+        to: to.trim(),
+        amount: toTokenAtomic(amount, info.decimalPoint), // token units, token decimals
+        tokenId: info.tokenId
+      })
+      setResult(r)
+      setTo(''); setAmount('')
+    } catch (err) {
+      if (!BdxRpcError.isUserRejection(err)) setError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={card}>
+      <h2 style={{ fontSize: 14, marginTop: 0 }}>
+        Privacy tokens (HF22{network === 'testnet' ? ' — live on testnet' : ''})
+      </h2>
+      <form onSubmit={load}>
+        <label>
+          Token ID
+          <input style={input} value={tokenId} onChange={e => setTokenId(e.target.value)}
+            placeholder="64-char token id" required spellCheck={false} />
+        </label>
+        <button style={btn} type="submit" disabled={busy || !tokenId.trim()}>
+          {busy && !info ? 'Loading…' : 'Load token'}
+        </button>
+      </form>
+
+      {info && (
+        <div style={{ fontSize: 12, marginTop: 8 }}>
+          <p style={{ margin: '4px 0' }}>
+            <b style={{ color: '#3EC745' }}>{info.ticker}</b> — {info.name}
+            {' '}(decimals: {info.decimalPoint}, supply: {fromTokenAtomic(info.currentSupply, info.decimalPoint)})
+          </p>
+          {balance && (balance.status === 'confirmed' ? (
+            <p style={{ margin: '4px 0' }}>
+              Balance: <b style={{ color: '#3EC745' }}>
+                {fromTokenAtomic(balance.unlocked, info.decimalPoint)} {info.ticker}</b>
+              {balance.locked > 0n && <> (+{fromTokenAtomic(balance.locked, info.decimalPoint)} locked)</>}
+            </p>
+          ) : (
+            <p style={{ margin: '4px 0', color: '#b58900' }}>
+              balance status: {balance.status} — the chain gave no confirmed figure
+            </p>
+          ))}
+
+          <label>
+            To address
+            <input style={input} value={to} onChange={e => setTo(e.target.value)}
+              placeholder="recipient" spellCheck={false} />
+          </label>
+          <label>
+            Amount ({info.ticker})
+            <input style={input} value={amount} onChange={e => setAmount(e.target.value)}
+              placeholder="1.25" inputMode="decimal" />
+          </label>
+          <button style={btn} type="button" disabled={busy || !to.trim() || !amount}
+            onClick={send}>
+            {busy ? 'Waiting for approval…' : `Send ${info.ticker}`}
+          </button>
+          <p style={{ color: '#8a8a8a', margin: '4px 0' }}>Network fee is paid in BDX.</p>
+        </div>
+      )}
+
+      {result && (
+        <p style={{ fontSize: 12, wordBreak: 'break-all' }}>
+          ✓ sent — tx <span style={{ color: '#3EC745' }}>{result.txHash}</span>
+        </p>
+      )}
+      {error && (
+        <p style={{ color: '#ff5c5c', fontSize: 12, wordBreak: 'break-all' }}>
+          token error{error.code !== undefined ? ` (${error.code})` : ''}: {error.message}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function SignMessageCard() {
   const { bdx } = useBeldex()
   const { isConnected } = useConnect()
@@ -296,6 +408,7 @@ function App() {
       <Address />
       <Balance />
       <SendForm />
+      <TokenCard />
       <SignMessageCard />
       <p style={{ color: '#8a8a8a', fontSize: 12 }}>
         Requires the Beldex Wallet extension. Serve over http(s) — the extension
