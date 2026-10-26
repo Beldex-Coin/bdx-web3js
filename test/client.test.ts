@@ -164,6 +164,29 @@ describe('methods — happy paths', () => {
     expect(wallet.calls[0]!.params).toEqual({ tokenId: 'a'.repeat(64) })
   })
 
+  it('getTokenBalances lists held tokens without any id', async () => {
+    const r = await bdx.getTokenBalances()
+    expect(wallet.calls[0]!.params).toBeUndefined() // no filter on the wire
+    expect(r.height).toBe(3_500_000)
+    expect(r.tokens[0]).toMatchObject({ status: 'confirmed', ticker: 'MOCK', decimalPoint: 6 })
+    expect(r.tokens[0]!.unlocked).toBe(4_000_000n)
+  })
+
+  it('getTokenBalances joins an id filter comma-separated (primitives-only wire)', async () => {
+    const ids = ['a'.repeat(64), 'beef1234']
+    const r = await bdx.getTokenBalances(ids)
+    expect(wallet.calls[0]!.params).toEqual({ tokenIds: ids.join(',') })
+    expect(r.tokens.map(t => t.status)).toEqual(['confirmed', 'not_found', 'not_found'])
+    expect(r.tokens[1]!.total).toBe(0n)
+  })
+
+  it('getTokenBalances validates ids and count before the wire', async () => {
+    await expect(bdx.getTokenBalances(['bad id!'])).rejects.toMatchObject({ code: ERROR_CODES.INVALID_PARAMS })
+    await expect(bdx.getTokenBalances(Array.from({ length: 17 }, () => 'aaaaaaaa')))
+      .rejects.toMatchObject({ code: ERROR_CODES.INVALID_PARAMS })
+    expect(wallet.calls).toHaveLength(0)
+  })
+
   it('getTokenInfo returns the descriptor', async () => {
     const i = await bdx.getTokenInfo('deadbeef01')
     expect(i).toMatchObject({ ticker: 'MOCK', name: 'Mock Token', decimalPoint: 6 })

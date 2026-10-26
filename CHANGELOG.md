@@ -3,8 +3,10 @@
 ## Unreleased
 
 ### Added
-- HF22 privacy tokens (wallet v1.3+; live on testnet): `getTokenBalance()` /
-  `getTokenInfo()` (grant-gated reads over the new `bdx_getTokenBalance` /
+- HF22 privacy tokens (wallet v1.3+; live on testnet): `getTokenBalances()`
+  (every token the account holds, one call — the dapp twin of the wallet's
+  Tokens screen; optional comma-joined id filter on the wire, params stay
+  primitives-only), `getTokenBalance()` / `getTokenInfo()` (grant-gated reads over the new `bdx_getTokenBalance` /
   `bdx_getTokenInfo` methods, BigInt token-atomic amounts) and token sends via
   `sendTransaction({ tokenId, … })` — amount in the token's own atomic units,
   fee in BDX, sweep disallowed. The wallet resolves ticker/decimals from its

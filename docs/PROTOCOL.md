@@ -147,6 +147,7 @@ structural/size gates; semantic validation (§4.5, §4.6, …) applies in additi
 | `bdx_signAuthChallenge` | `requestId` | string | 64 | no |
 | `bdx_signAuthChallenge` | `expiresInMs` | number | — | no |
 | `bdx_getTokenBalance` | `tokenId` | string | 64 | yes |
+| `bdx_getTokenBalances` | `tokenIds` | string | 1040 | no |
 | `bdx_getTokenInfo` | `tokenId` | string | 64 | yes |
 | `bdx_sendTransaction` | `to` | string | 128 | yes |
 | `bdx_sendTransaction` | `amount` | string | 32 | no |
@@ -226,6 +227,30 @@ Grant-gated and rate-limited like `bdx_getBalance` — token holdings are
 balance data. On a wallet/LWS without HF22 token support the method fails
 `-32601`/`-32603` ("server does not support token lookups"); `unknown` status
 means the chain gave no verdict, not a zero balance.
+
+### 4.4c `bdx_getTokenBalances` — connected, wallet v1.3+ (HF22 chains)
+
+```ts
+params: {
+  tokenIds?: string              // OPTIONAL filter: comma-separated ids (<=16, each
+                                 // <=64 chars of A-Za-z0-9). Params are primitives-only
+                                 // (§4.0), hence a joined string, not an array.
+}
+result: {
+  tokens: Array<{                // every token the account HOLDS, plus any ids
+    tokenId: string              // explicitly asked about (e.g. unmined registrations)
+    status: 'confirmed' | 'not_found' | 'unknown'
+    total: string, unlocked: string, locked: string   // TOKEN atomic units
+    ticker?: string, decimalPoint?: number            // when status === 'confirmed'
+  }>
+  height: number                 // one scanned height for the whole batch
+}
+```
+
+The dapp-facing twin of the wallet panel's own token screen: with no filter it
+answers "what tokens does this account hold?" in one call. Same gating as
+`bdx_getBalance` (grant + rate limit) — the full holdings list is balance data
+and MUST NOT leak pre-grant.
 
 ### 4.4b `bdx_getTokenInfo` — public (granted origins), wallet v1.3+
 

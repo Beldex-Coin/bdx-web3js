@@ -48,6 +48,20 @@ function defaultHandlers(): Record<BdxMethod, Handler> {
       total: '5000000', unlocked: '4000000', locked: '1000000',
       height: 3_500_000, ticker: 'MOCK', decimalPoint: 6
     }),
+    bdx_getTokenBalances: (p) => {
+      const filter = (p as { tokenIds?: string } | undefined)?.tokenIds
+      const extras = filter ? filter.split(',') : []
+      return {
+        height: 3_500_000,
+        tokens: [
+          { tokenId: 'f'.repeat(64), status: 'confirmed', total: '5000000',
+            unlocked: '4000000', locked: '1000000', ticker: 'MOCK', decimalPoint: 6 },
+          ...extras.map(id => ({
+            tokenId: id, status: 'not_found', total: '0', unlocked: '0', locked: '0'
+          }))
+        ]
+      }
+    },
     bdx_getTokenInfo: (p) => ({
       tokenId: (p as { tokenId: string }).tokenId, ticker: 'MOCK', name: 'Mock Token',
       owner: 'a'.repeat(64), metaInfo: '', currentSupply: '1000000000',

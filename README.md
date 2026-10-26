@@ -94,20 +94,48 @@ Server-side verification checklist: parse with `parseAuthChallenge(message)` (or
 
 ### Privacy tokens (HF22 — live on testnet)
 
-Wallet v1.3+ on an HF22 chain exposes token reads and token sends (token registration stays wallet-panel-only):
+Wallet v1.3+ on an HF22 chain exposes token reads and token sends to dapps. Token registration (minting) stays wallet-panel-only. All token methods require a `connect()` grant, like `getBalance()`.
+
+**Fetch every token the wallet holds** — one call, no token ids needed (the dapp twin of the wallet's own Tokens screen):
 
 ```ts
-const info = await bdx.getTokenInfo(tokenId)        // ticker, name, decimalPoint, supply
-const bal  = await bdx.getTokenBalance(tokenId)     // BigInt amounts in TOKEN atomic units
+const { tokens, height } = await bdx.getTokenBalances()
+for (const t of tokens) {
+  if (t.status !== 'confirmed') continue  // 'unknown' = no chain verdict, NOT a zero balance
+  console.log(`${t.ticker}: ${fromTokenAtomic(t.unlocked, t.decimalPoint)} unlocked`,
+              t.locked > 0n ? `(+${fromTokenAtomic(t.locked, t.decimalPoint)} locked)` : '')
+}
 
-await bdx.sendTransaction({
-  to,
-  tokenId,
-  amount: toTokenAtomic('1.25', info.decimalPoint), // token units, token decimals
-})                                                   // network fee stays BDX
+// Optionally ALSO ask about tokens not (yet) held, e.g. a just-registered one:
+await bdx.getTokenBalances([knownTokenId])          // ≤16 ids
 ```
 
-Use `toTokenAtomic`/`fromTokenAtomic` with the `decimalPoint` from `getTokenInfo()` — never a page-supplied value. The wallet resolves ticker/decimals itself for the approval card, so a dapp cannot influence how the approved amount is displayed. `sweep` is not available for token sends; on wallets/LWS without HF22 support the token methods fail cleanly (`-32601`/`-32603`).
+**Look up one token** — balance for the connected wallet, or the public descriptor:
+
+```ts
+const bal  = await bdx.getTokenBalance(tokenId)     // { status, total, unlocked, locked, ticker?, decimalPoint?, height } — BigInt amounts in TOKEN atomic units
+const info = await bdx.getTokenInfo(tokenId)        // { ticker, name, owner, metaInfo, currentSupply, totalMaxSupply, decimalPoint }
+```
+
+**Send a token** — set `tokenId` on a normal send; `amount` then means the token's own atomic units, and the network fee stays BDX (the sender needs unlocked BDX too):
+
+```ts
+const info = await bdx.getTokenInfo(tokenId)        // authoritative decimals
+const { txHash, fee, operationId } = await bdx.sendTransaction({
+  to,                                               // concrete address (resolve BNS first)
+  tokenId,
+  amount: toTokenAtomic('1.25', info.decimalPoint)  // display units → token atomic
+})
+console.log('sent', txHash, 'BDX fee', fromAtomic(fee))
+```
+
+The user approves in the wallet, which resolves the ticker/decimals from its own LWS for the approval card — a dapp can never influence how the approved amount is displayed, and an unresolvable token is refused before approval (`-32602`). `sweep` is not available for token sends.
+
+**Track a token transaction.** Token sends ride the same recovery machinery as BDX sends: prefer `sendTransactionSafe({ to, tokenId, amount, idempotencyKey })` so a timeout can never double-pay, keep the returned `operationId`, and poll `bdx.getOperationStatus(operationId)` → `executing | confirmed | failed | unknown` (confirmed carries `txHash` + BDX `fee`). Beldex is a privacy chain, so there is no dapp API for listing an address's past transactions — the wallet's own history stays in the wallet; show the user your dapp's own record (txHash + explorer link, e.g. `https://testnet.beldex.dev/tx/<txHash>`) for payments it initiated.
+
+**Amount conversion.** Always use `toTokenAtomic`/`fromTokenAtomic` with the `decimalPoint` from `getTokenInfo()`/`getTokenBalances()` — never a user- or page-supplied value: a wrong decimal point displays (and sends) amounts off by powers of ten.
+
+**Errors.** On wallets/LWS without HF22 token support the methods fail cleanly: `-32601` (method unknown — pre-v1.3 wallet), `-32603` "token lookup unavailable" (legacy LWS), `-32602` "unknown or invalid token id". Status `unknown` in a balance reply means the chain gave no verdict — treat it as "unknown", never as zero.
 
 ### BNS names
 
@@ -196,7 +224,7 @@ Hooks: `useBeldex()` (full context incl. the raw `BeldexWeb3` client), `useConne
 
 ## API surface
 
-`detectProvider(opts?)` · `new BeldexWeb3(provider, opts?)` · `connect()` · `connectWithProof(opts?)` · `disconnect()` · `getAddress()` · `getBalance()` · `sendTransaction(params)` · `sendTransactionSafe(params, opts?)` · `getOperationStatus(operationId)` · `getTokenBalance(tokenId)` · `getTokenInfo(tokenId)` · `signMessage(msg)` · `signAuthChallenge(params)` · `verifyMessage(params)` · `resolveBns(name)` · `getNetwork()` · `getState()` · `buildAuthChallenge(address, nonce, ts)` · `on/off/once(event, fn)` · `address` / `isConnected` getters.
+`detectProvider(opts?)` · `new BeldexWeb3(provider, opts?)` · `connect()` · `connectWithProof(opts?)` · `disconnect()` · `getAddress()` · `getBalance()` · `sendTransaction(params)` · `sendTransactionSafe(params, opts?)` · `getOperationStatus(operationId)` · `getTokenBalance(tokenId)` · `getTokenBalances(tokenIds?)` · `getTokenInfo(tokenId)` · `signMessage(msg)` · `signAuthChallenge(params)` · `verifyMessage(params)` · `resolveBns(name)` · `getNetwork()` · `getState()` · `buildAuthChallenge(address, nonce, ts)` · `on/off/once(event, fn)` · `address` / `isConnected` getters.
 
 Events: `connect`, `disconnect`, `accountsChanged`, `networkChanged`, `balanceChanged`, `lock`, `unlock`.
 

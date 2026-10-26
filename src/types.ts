@@ -12,6 +12,7 @@ export const BDX_METHODS = [
   'bdx_getAddress',
   'bdx_getBalance',
   'bdx_getTokenBalance',
+  'bdx_getTokenBalances',
   'bdx_getTokenInfo',
   'bdx_sendTransaction',
   'bdx_getOperationStatus',
@@ -203,6 +204,19 @@ export interface TokenBalance {
   height: number
   ticker?: string
   decimalPoint?: number
+}
+
+/** Raw wire shape of bdx_getTokenBalances: every token the account holds
+ *  (plus any explicitly asked-about ids). One scan height for the batch. */
+export interface GetTokenBalancesResult {
+  tokens: Array<Omit<GetTokenBalanceResult, 'height'>>
+  height: number
+}
+
+/** SDK-facing shape: amounts parsed to BigInt. */
+export interface TokenBalances {
+  tokens: Array<Omit<TokenBalance, 'height'>>
+  height: number
 }
 
 /** bdx_getTokenInfo — public chain data for one HF22 token. */

@@ -212,25 +212,41 @@ function SendForm() {
 function TokenCard() {
   const { bdx, network } = useBeldex()
   const { isConnected } = useConnect()
-  const [tokenId, setTokenId] = useState('')
-  const [info, setInfo] = useState(null)      // TokenInfo
-  const [balance, setBalance] = useState(null) // TokenBalance
+  const [list, setList] = useState(null)       // TokenBalances | null
+  const [listError, setListError] = useState(null)
+  const [tokenId, setTokenId] = useState('')   // manual lookup (tokens not held)
+  const [selected, setSelected] = useState(null) // { tokenId, ticker, decimalPoint, unlocked? }
   const [to, setTo] = useState('')
   const [amount, setAmount] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
 
+  // Like the wallet's own Tokens screen: one call lists everything held.
+  const refresh = async () => {
+    setListError(null)
+    try {
+      setList(await bdx.getTokenBalances())
+    } catch (err) {
+      setList(null)
+      setListError(err)
+    }
+  }
+
+  useEffect(() => {
+    if (!bdx || !isConnected) { setList(null); setSelected(null); return }
+    refresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bdx, isConnected])
+
   if (!isConnected) return null
 
-  const load = async (e) => {
+  const lookup = async (e) => {
     e.preventDefault()
-    setError(null); setInfo(null); setBalance(null); setResult(null)
-    setBusy(true)
+    setError(null); setResult(null); setBusy(true)
     try {
       const i = await bdx.getTokenInfo(tokenId.trim())
-      setInfo(i)
-      setBalance(await bdx.getTokenBalance(tokenId.trim()))
+      setSelected({ tokenId: i.tokenId, ticker: i.ticker, decimalPoint: i.decimalPoint })
     } catch (err) {
       setError(err)
     } finally {
@@ -243,11 +259,12 @@ function TokenCard() {
     try {
       const r = await bdx.sendTransaction({
         to: to.trim(),
-        amount: toTokenAtomic(amount, info.decimalPoint), // token units, token decimals
-        tokenId: info.tokenId
+        amount: toTokenAtomic(amount, selected.decimalPoint), // token units, token decimals
+        tokenId: selected.tokenId
       })
       setResult(r)
       setTo(''); setAmount('')
+      refresh()
     } catch (err) {
       if (!BdxRpcError.isUserRejection(err)) setError(err)
     } finally {
@@ -255,53 +272,76 @@ function TokenCard() {
     }
   }
 
+  const unsupported = (e) => e && (e.code === -32601 || e.code === 4999)
+
   return (
     <div style={card}>
       <h2 style={{ fontSize: 14, marginTop: 0 }}>
         Privacy tokens (HF22{network === 'testnet' ? ' — live on testnet' : ''})
       </h2>
-      <form onSubmit={load}>
-        <label>
-          Token ID
+
+      {listError ? (
+        <p style={{ color: unsupported(listError) ? '#b58900' : '#ff5c5c', fontSize: 12 }}>
+          {unsupported(listError)
+            ? 'This wallet does not support privacy tokens yet — extension v1.3+ on an HF22 chain (testnet) is required.'
+            : `could not load tokens (${listError.code ?? '?'}): ${listError.message}`}
+        </p>
+      ) : !list ? (
+        <p style={{ fontSize: 12 }}>loading your tokens…</p>
+      ) : list.tokens.length === 0 ? (
+        <p style={{ fontSize: 12, color: '#8a8a8a' }}>This wallet holds no tokens yet.</p>
+      ) : (
+        <div style={{ fontSize: 12 }}>
+          {list.tokens.map(t => (
+            <p key={t.tokenId} style={{ margin: '4px 0', wordBreak: 'break-all' }}>
+              <button type="button"
+                style={{ ...btn, padding: '4px 10px', marginTop: 0, marginRight: 8,
+                  background: selected?.tokenId === t.tokenId ? '#3EC745' : '#1d3a1f',
+                  color: selected?.tokenId === t.tokenId ? '#000' : '#3EC745' }}
+                onClick={() => { setSelected(t); setResult(null); setError(null) }}>
+                {t.ticker ?? t.tokenId.slice(0, 10) + '…'}
+              </button>
+              {t.status === 'confirmed'
+                ? <>balance <b style={{ color: '#3EC745' }}>
+                    {fromTokenAtomic(t.unlocked, t.decimalPoint)} {t.ticker}</b>
+                    {t.locked > 0n && <> (+{fromTokenAtomic(t.locked, t.decimalPoint)} locked)</>}</>
+                : <span style={{ color: '#b58900' }}>status: {t.status}</span>}
+            </p>
+          ))}
+          <p style={{ color: '#8a8a8a', margin: '4px 0' }}>scanned height {list.height}</p>
+        </div>
+      )}
+
+      <form onSubmit={lookup} style={{ marginTop: 8 }}>
+        <label style={{ fontSize: 12 }}>
+          Not listed? Look up a token by id
           <input style={input} value={tokenId} onChange={e => setTokenId(e.target.value)}
-            placeholder="64-char token id" required spellCheck={false} />
+            placeholder="64-char token id" spellCheck={false} />
         </label>
-        <button style={btn} type="submit" disabled={busy || !tokenId.trim()}>
-          {busy && !info ? 'Loading…' : 'Load token'}
+        <button style={{ ...btn, marginTop: 4 }} type="submit" disabled={busy || !tokenId.trim()}>
+          Look up
         </button>
       </form>
 
-      {info && (
-        <div style={{ fontSize: 12, marginTop: 8 }}>
+      {selected && (
+        <div style={{ fontSize: 12, marginTop: 8, borderTop: '1px solid #222', paddingTop: 8 }}>
           <p style={{ margin: '4px 0' }}>
-            <b style={{ color: '#3EC745' }}>{info.ticker}</b> — {info.name}
-            {' '}(decimals: {info.decimalPoint}, supply: {fromTokenAtomic(info.currentSupply, info.decimalPoint)})
+            Send <b style={{ color: '#3EC745' }}>{selected.ticker}</b>
+            {' '}(decimals: {selected.decimalPoint})
           </p>
-          {balance && (balance.status === 'confirmed' ? (
-            <p style={{ margin: '4px 0' }}>
-              Balance: <b style={{ color: '#3EC745' }}>
-                {fromTokenAtomic(balance.unlocked, info.decimalPoint)} {info.ticker}</b>
-              {balance.locked > 0n && <> (+{fromTokenAtomic(balance.locked, info.decimalPoint)} locked)</>}
-            </p>
-          ) : (
-            <p style={{ margin: '4px 0', color: '#b58900' }}>
-              balance status: {balance.status} — the chain gave no confirmed figure
-            </p>
-          ))}
-
           <label>
             To address
             <input style={input} value={to} onChange={e => setTo(e.target.value)}
               placeholder="recipient" spellCheck={false} />
           </label>
           <label>
-            Amount ({info.ticker})
+            Amount ({selected.ticker})
             <input style={input} value={amount} onChange={e => setAmount(e.target.value)}
               placeholder="1.25" inputMode="decimal" />
           </label>
           <button style={btn} type="button" disabled={busy || !to.trim() || !amount}
             onClick={send}>
-            {busy ? 'Waiting for approval…' : `Send ${info.ticker}`}
+            {busy ? 'Waiting for approval…' : `Send ${selected.ticker}`}
           </button>
           <p style={{ color: '#8a8a8a', margin: '4px 0' }}>Network fee is paid in BDX.</p>
         </div>
@@ -314,7 +354,9 @@ function TokenCard() {
       )}
       {error && (
         <p style={{ color: '#ff5c5c', fontSize: 12, wordBreak: 'break-all' }}>
-          token error{error.code !== undefined ? ` (${error.code})` : ''}: {error.message}
+          {unsupported(error)
+            ? 'This wallet does not support privacy tokens yet — extension v1.3+ on an HF22 chain (testnet) is required.'
+            : <>token error{error.code !== undefined ? ` (${error.code})` : ''}: {error.message}</>}
         </p>
       )}
     </div>

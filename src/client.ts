@@ -10,8 +10,8 @@ import type {
   AccountsChangedEventData, Balance, BdxEvent, BdxMethod, BeldexProvider,
   AuthChallenge, ConnectEventData, ConnectProof, ConnectResult,
   ConnectWithProofResult, GetAddressResult, GetBalanceResult, Nettype,
-  GetTokenBalanceResult, OperationStatus, SafeSendResult,
-  SignAuthChallengeParams, SignAuthChallengeResult, TokenBalance, TokenInfo,
+  GetTokenBalanceResult, GetTokenBalancesResult, OperationStatus, SafeSendResult,
+  SignAuthChallengeParams, SignAuthChallengeResult, TokenBalance, TokenBalances, TokenInfo,
   GetNetworkResult, GetStateResult, ResolveBnsResult, SendTransactionParams,
   SendTransactionResult, SignMessageResult, VerifyMessageParams,
   VerifyMessageResult, WalletState
@@ -329,6 +329,36 @@ export class BeldexWeb3 {
       total: parseAtomic(r.total),
       unlocked: parseAtomic(r.unlocked),
       locked: parseAtomic(r.locked)
+    }
+  }
+
+  /**
+   * Every HF22 token the connected wallet holds (like the wallet's own Tokens
+   * screen) — no token id needed. Optionally pass ids to ALSO ask about
+   * tokens not (yet) held, e.g. a just-registered one. Max 16 ids.
+   */
+  async getTokenBalances(tokenIds: string[] = []): Promise<TokenBalances> {
+    if (!Array.isArray(tokenIds) || tokenIds.length > 16) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'tokenIds must be an array of at most 16 ids')
+    }
+    for (const id of tokenIds) {
+      if (typeof id !== 'string' || !TOKEN_ID_RE.test(id)) {
+        throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'each tokenId must be 1–64 chars of A-Za-z0-9')
+      }
+    }
+    // Structural rules keep wire params primitive — ids travel comma-joined
+    // (the id charset cannot contain a comma, so the join is unambiguous).
+    const r = tokenIds.length > 0
+      ? await this.request<GetTokenBalancesResult>('bdx_getTokenBalances', { tokenIds: tokenIds.join(',') })
+      : await this.request<GetTokenBalancesResult>('bdx_getTokenBalances')
+    return {
+      height: r.height,
+      tokens: r.tokens.map(t => ({
+        ...t,
+        total: parseAtomic(t.total),
+        unlocked: parseAtomic(t.unlocked),
+        locked: parseAtomic(t.locked)
+      }))
     }
   }
 
