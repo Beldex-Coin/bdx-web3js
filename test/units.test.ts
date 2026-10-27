@@ -71,3 +71,23 @@ describe('round-trips (randomized)', () => {
     expect(toAtomic(fromAtomic(big))).toBe(big)
   })
 })
+
+describe('token units (HF22, per-token decimals)', () => {
+  it('converts both ways with arbitrary decimals', async () => {
+    const { toTokenAtomic, fromTokenAtomic } = await import('../src/units.js')
+    expect(toTokenAtomic('1.25', 6)).toBe(1_250_000n)
+    expect(toTokenAtomic('7', 0)).toBe(7n)
+    expect(toTokenAtomic(2n, 3)).toBe(2_000n)
+    expect(fromTokenAtomic(1_250_000n, 6)).toBe('1.25')
+    expect(fromTokenAtomic('1250000', 6)).toBe('1.25')
+    expect(fromTokenAtomic(7n, 0)).toBe('7')
+  })
+  it('rejects excess precision, negatives, bad decimals', async () => {
+    const { toTokenAtomic, fromTokenAtomic } = await import('../src/units.js')
+    expect(() => toTokenAtomic('1.2345', 3)).toThrow(/3 decimal/)
+    expect(() => toTokenAtomic(-1n, 6)).toThrow()
+    expect(() => toTokenAtomic('1', 19)).toThrow(/decimalPoint/)
+    expect(() => toTokenAtomic('1', 1.5)).toThrow(/decimalPoint/)
+    expect(() => fromTokenAtomic(-1n, 6)).toThrow()
+  })
+})

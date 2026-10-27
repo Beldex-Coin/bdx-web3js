@@ -146,12 +146,16 @@ structural/size gates; semantic validation (§4.5, §4.6, …) applies in additi
 | `bdx_signAuthChallenge` | `nonce` | string | 128 | yes |
 | `bdx_signAuthChallenge` | `requestId` | string | 64 | no |
 | `bdx_signAuthChallenge` | `expiresInMs` | number | — | no |
+| `bdx_getTokenBalance` | `tokenId` | string | 64 | yes |
+| `bdx_getTokenBalances` | `tokenIds` | string | 1040 | no |
+| `bdx_getTokenInfo` | `tokenId` | string | 64 | yes |
 | `bdx_sendTransaction` | `to` | string | 128 | yes |
 | `bdx_sendTransaction` | `amount` | string | 32 | no |
 | `bdx_sendTransaction` | `sweep` | boolean | — | no |
 | `bdx_sendTransaction` | `priority` | number | — | no |
 | `bdx_sendTransaction` | `paymentId` | string | 64 | no |
 | `bdx_sendTransaction` | `idempotencyKey` | string | 128 | no |
+| `bdx_sendTransaction` | `tokenId` | string | 64 | no |
 | `bdx_getOperationStatus` | `operationId` | string | 128 | yes |
 
 ### 4.1 `bdx_connect` — approval
@@ -203,6 +207,66 @@ result: {
 
 The Wallet answers from its own LWS sync cache and MUST refresh the cache first if it is older than 60 s. The Wallet MUST NOT expose the view key or raw output data.
 
+### 4.4a `bdx_getTokenBalance` — connected, wallet v1.3+ (HF22 chains)
+
+```ts
+params: { tokenId: string }     // opaque HF22 token id, <=64 chars of A-Za-z0-9
+result: {
+  tokenId: string
+  status: 'confirmed' | 'not_found' | 'unknown'
+  total: string                  // TOKEN atomic units (integer strings)
+  unlocked: string
+  locked: string
+  height: number                 // scanned height backing the figures
+  ticker?: string                // present when status === 'confirmed'
+  decimalPoint?: number
+}
+```
+
+Grant-gated and rate-limited like `bdx_getBalance` — token holdings are
+balance data. On a wallet/LWS without HF22 token support the method fails
+`-32601`/`-32603` ("server does not support token lookups"); `unknown` status
+means the chain gave no verdict, not a zero balance.
+
+### 4.4c `bdx_getTokenBalances` — connected, wallet v1.3+ (HF22 chains)
+
+```ts
+params: {
+  tokenIds?: string              // OPTIONAL filter: comma-separated ids (<=16, each
+                                 // <=64 chars of A-Za-z0-9). Params are primitives-only
+                                 // (§4.0), hence a joined string, not an array.
+}
+result: {
+  tokens: Array<{                // every token the account HOLDS, plus any ids
+    tokenId: string              // explicitly asked about (e.g. unmined registrations)
+    status: 'confirmed' | 'not_found' | 'unknown'
+    total: string, unlocked: string, locked: string   // TOKEN atomic units
+    ticker?: string, decimalPoint?: number            // when status === 'confirmed'
+  }>
+  height: number                 // one scanned height for the whole batch
+}
+```
+
+The dapp-facing twin of the wallet panel's own token screen: with no filter it
+answers "what tokens does this account hold?" in one call. Same gating as
+`bdx_getBalance` (grant + rate limit) — the full holdings list is balance data
+and MUST NOT leak pre-grant.
+
+### 4.4b `bdx_getTokenInfo` — public (granted origins), wallet v1.3+
+
+```ts
+params: { tokenId: string }
+result: {
+  tokenId: string, ticker: string, name: string, owner: string,
+  metaInfo: string, currentSupply: string, totalMaxSupply: string,
+  decimalPoint: number           // authoritative decimals for display/conversion
+}
+```
+
+Public chain data (no secrets touched), but grant-gated + rate-limited so an
+ungranted page cannot use the wallet as an LWS proxy. Errors: `4100`,
+`-32602` (bad/unknown token id, sanitized), `-32603`.
+
 ### 4.5 `bdx_sendTransaction` — approval
 
 ```ts
@@ -219,6 +283,9 @@ params: {
   idempotencyKey?: string        // optional (wallet v1.2+): 8–128 chars of [A-Za-z0-9._-].
                                  // Same (origin, key) replays the recorded outcome
                                  // instead of creating a second approved payment.
+  tokenId?: string               // optional (wallet v1.3+, HF22): the whole send is in
+                                 // this token; `amount` becomes TOKEN atomic units; the
+                                 // network fee stays BDX. MUST NOT combine with sweep.
 }
 result: {
   txHash: string
@@ -230,6 +297,7 @@ result: {
 ```
 
 - The approval UI MUST display: the requesting origin, the **full untruncated** recipient address, the amount in BDX (all 9 decimals), the priority (flagged if flash), and a fee figure (labelled "estimated" if not exact) — all before consent.
+- Token sends (`tokenId` set): the Wallet MUST resolve the token's ticker and `decimal_point` from its own LWS — NEVER from page-supplied data — and display the amount in those units plus the ticker and token id; a page must not be able to influence how the approved amount reads. If the token cannot be resolved, the Wallet MUST refuse (`-32602`) rather than display raw atomic units. Token deployment/registration is panel-only — not reachable from the dapp API.
 - The transaction MUST be built, signed, and broadcast entirely within Wallet contexts; no intermediate artifacts (unsigned tx, ring members, keys) ever reach the page.
 - The Wallet MUST enforce a single in-flight send per wallet (dapp and panel flows share the lock); a second concurrent request fails with `-32603`.
 - Errors: `4001`, `4100`, `4900`, `4999`, `-32602` (any param invalid), `-32603` (build/broadcast failure; message MUST be sanitized). With an `idempotencyKey` whose operation is still `executing`, the Wallet rejects with `-32603` ("a transaction for this idempotency key is already in progress") rather than opening a second approval.

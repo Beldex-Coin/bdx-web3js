@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BeldexProvider, ConnectButton, useBeldex, useConnect, useBalance, useSignMessage, fromAtomic } from '@bdxi/web3js/react'
-import { toAtomic, BdxRpcError, parseAuthChallenge, validateSigningText } from '@bdxi/web3js'
+import { toAtomic, toTokenAtomic, fromTokenAtomic, BdxRpcError, parseAuthChallenge, validateSigningText } from '@bdxi/web3js'
 
 // Reserved for wallet-composed auth statements (bdx_signAuthChallenge) —
 // the SDK and the wallet both refuse it in generic message signing.
@@ -63,7 +63,7 @@ function DisconnectButton() {
 }
 
 function Address() {
-  const { bdx } = useBeldex()
+  const { bdx, network } = useBeldex()
   const { address, proof } = useConnect()
   const [auth, setAuth] = useState(null) // null | { ok, why? }
 
@@ -79,9 +79,21 @@ function Address() {
   return (
     <div style={{ fontSize: 12 }}>
       <p>
+        {network && (
+          <span style={{
+            background: network === 'testnet' ? '#b58900' : '#1d3a1f',
+            color: network === 'testnet' ? '#000' : '#3EC745',
+            padding: '2px 8px', marginRight: 8, fontSize: 11, fontWeight: 700
+          }}>
+            {network.toUpperCase()}
+          </span>
+        )}
         Address:{' '}
         <span style={{ color: '#3EC745', wordBreak: 'break-all' }}>{address}</span>
       </p>
+      {network === 'testnet' && (
+        <p style={{ color: '#b58900' }}>Testnet — coins have no value; addresses start with 9/A/B.</p>
+      )}
       {proof && (
         <p style={{ wordBreak: 'break-all' }}>
           ✓ wallet-composed statement signed on connect ({proof.serverIssued ? 'server-issued nonce' : 'self-nonced — not for login'},
@@ -197,6 +209,160 @@ function SendForm() {
   )
 }
 
+function TokenCard() {
+  const { bdx, network } = useBeldex()
+  const { isConnected } = useConnect()
+  const [list, setList] = useState(null)       // TokenBalances | null
+  const [listError, setListError] = useState(null)
+  const [tokenId, setTokenId] = useState('')   // manual lookup (tokens not held)
+  const [selected, setSelected] = useState(null) // { tokenId, ticker, decimalPoint, unlocked? }
+  const [to, setTo] = useState('')
+  const [amount, setAmount] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState(null)
+
+  // Like the wallet's own Tokens screen: one call lists everything held.
+  const refresh = async () => {
+    setListError(null)
+    try {
+      setList(await bdx.getTokenBalances())
+    } catch (err) {
+      setList(null)
+      setListError(err)
+    }
+  }
+
+  useEffect(() => {
+    if (!bdx || !isConnected) { setList(null); setSelected(null); return }
+    refresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bdx, isConnected])
+
+  if (!isConnected) return null
+
+  const lookup = async (e) => {
+    e.preventDefault()
+    setError(null); setResult(null); setBusy(true)
+    try {
+      const i = await bdx.getTokenInfo(tokenId.trim())
+      setSelected({ tokenId: i.tokenId, ticker: i.ticker, decimalPoint: i.decimalPoint })
+    } catch (err) {
+      setError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const send = async () => {
+    setError(null); setResult(null); setBusy(true)
+    try {
+      const r = await bdx.sendTransaction({
+        to: to.trim(),
+        amount: toTokenAtomic(amount, selected.decimalPoint), // token units, token decimals
+        tokenId: selected.tokenId
+      })
+      setResult(r)
+      setTo(''); setAmount('')
+      refresh()
+    } catch (err) {
+      if (!BdxRpcError.isUserRejection(err)) setError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const unsupported = (e) => e && (e.code === -32601 || e.code === 4999)
+
+  return (
+    <div style={card}>
+      <h2 style={{ fontSize: 14, marginTop: 0 }}>
+        Privacy tokens (HF22{network === 'testnet' ? ' — live on testnet' : ''})
+      </h2>
+
+      {listError ? (
+        <p style={{ color: unsupported(listError) ? '#b58900' : '#ff5c5c', fontSize: 12 }}>
+          {unsupported(listError)
+            ? 'This wallet does not support privacy tokens yet — extension v1.3+ on an HF22 chain (testnet) is required.'
+            : `could not load tokens (${listError.code ?? '?'}): ${listError.message}`}
+        </p>
+      ) : !list ? (
+        <p style={{ fontSize: 12 }}>loading your tokens…</p>
+      ) : list.tokens.length === 0 ? (
+        <p style={{ fontSize: 12, color: '#8a8a8a' }}>This wallet holds no tokens yet.</p>
+      ) : (
+        <div style={{ fontSize: 12 }}>
+          {list.tokens.map(t => (
+            <p key={t.tokenId} style={{ margin: '4px 0', wordBreak: 'break-all' }}>
+              <button type="button"
+                style={{ ...btn, padding: '4px 10px', marginTop: 0, marginRight: 8,
+                  background: selected?.tokenId === t.tokenId ? '#3EC745' : '#1d3a1f',
+                  color: selected?.tokenId === t.tokenId ? '#000' : '#3EC745' }}
+                onClick={() => { setSelected(t); setResult(null); setError(null) }}>
+                {t.ticker ?? t.tokenId.slice(0, 10) + '…'}
+              </button>
+              {t.status === 'confirmed'
+                ? <>balance <b style={{ color: '#3EC745' }}>
+                    {fromTokenAtomic(t.unlocked, t.decimalPoint)} {t.ticker}</b>
+                    {t.locked > 0n && <> (+{fromTokenAtomic(t.locked, t.decimalPoint)} locked)</>}</>
+                : <span style={{ color: '#b58900' }}>status: {t.status}</span>}
+            </p>
+          ))}
+          <p style={{ color: '#8a8a8a', margin: '4px 0' }}>scanned height {list.height}</p>
+        </div>
+      )}
+
+      <form onSubmit={lookup} style={{ marginTop: 8 }}>
+        <label style={{ fontSize: 12 }}>
+          Not listed? Look up a token by id
+          <input style={input} value={tokenId} onChange={e => setTokenId(e.target.value)}
+            placeholder="64-char token id" spellCheck={false} />
+        </label>
+        <button style={{ ...btn, marginTop: 4 }} type="submit" disabled={busy || !tokenId.trim()}>
+          Look up
+        </button>
+      </form>
+
+      {selected && (
+        <div style={{ fontSize: 12, marginTop: 8, borderTop: '1px solid #222', paddingTop: 8 }}>
+          <p style={{ margin: '4px 0' }}>
+            Send <b style={{ color: '#3EC745' }}>{selected.ticker}</b>
+            {' '}(decimals: {selected.decimalPoint})
+          </p>
+          <label>
+            To address
+            <input style={input} value={to} onChange={e => setTo(e.target.value)}
+              placeholder="recipient" spellCheck={false} />
+          </label>
+          <label>
+            Amount ({selected.ticker})
+            <input style={input} value={amount} onChange={e => setAmount(e.target.value)}
+              placeholder="1.25" inputMode="decimal" />
+          </label>
+          <button style={btn} type="button" disabled={busy || !to.trim() || !amount}
+            onClick={send}>
+            {busy ? 'Waiting for approval…' : `Send ${selected.ticker}`}
+          </button>
+          <p style={{ color: '#8a8a8a', margin: '4px 0' }}>Network fee is paid in BDX.</p>
+        </div>
+      )}
+
+      {result && (
+        <p style={{ fontSize: 12, wordBreak: 'break-all' }}>
+          ✓ sent — tx <span style={{ color: '#3EC745' }}>{result.txHash}</span>
+        </p>
+      )}
+      {error && (
+        <p style={{ color: '#ff5c5c', fontSize: 12, wordBreak: 'break-all' }}>
+          {unsupported(error)
+            ? 'This wallet does not support privacy tokens yet — extension v1.3+ on an HF22 chain (testnet) is required.'
+            : <>token error{error.code !== undefined ? ` (${error.code})` : ''}: {error.message}</>}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function SignMessageCard() {
   const { bdx } = useBeldex()
   const { isConnected } = useConnect()
@@ -284,6 +450,7 @@ function App() {
       <Address />
       <Balance />
       <SendForm />
+      <TokenCard />
       <SignMessageCard />
       <p style={{ color: '#8a8a8a', fontSize: 12 }}>
         Requires the Beldex Wallet extension. Serve over http(s) — the extension

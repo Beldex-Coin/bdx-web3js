@@ -10,7 +10,8 @@ import type {
   AccountsChangedEventData, Balance, BdxEvent, BdxMethod, BeldexProvider,
   AuthChallenge, ConnectEventData, ConnectProof, ConnectResult,
   ConnectWithProofResult, GetAddressResult, GetBalanceResult, Nettype,
-  OperationStatus, SafeSendResult, SignAuthChallengeParams, SignAuthChallengeResult,
+  GetTokenBalanceResult, GetTokenBalancesResult, OperationStatus, SafeSendResult,
+  SignAuthChallengeParams, SignAuthChallengeResult, TokenBalance, TokenBalances, TokenInfo,
   GetNetworkResult, GetStateResult, ResolveBnsResult, SendTransactionParams,
   SendTransactionResult, SignMessageResult, VerifyMessageParams,
   VerifyMessageResult, WalletState
@@ -31,6 +32,8 @@ const APPROVAL_METHODS: ReadonlySet<BdxMethod> = new Set([
 const MUTATING_METHODS: ReadonlySet<BdxMethod> = new Set(['bdx_sendTransaction'])
 
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9._-]{8,128}$/
+/** HF22 token ids are opaque — bounded + wire-safe is all the SDK asserts. */
+const TOKEN_ID_RE = /^[A-Za-z0-9]{1,64}$/
 
 // ------------------------------------------------------------- auth proof ----
 // Single-line on purpose: the wallet rejects control characters (incl. \n),
@@ -121,6 +124,7 @@ export class BeldexWeb3 {
   private readonly readTimeoutMs: number
   private readonly approvalTimeoutMs: number
   private cachedAddress: string | null = null
+  private cachedNetwork: Nettype | null = null
   /** Our listeners keyed by event, mapping user fn → wrapped fn (for off()). */
   private readonly subs = new Map<BdxEvent, Map<(data: never) => void, (data: unknown) => void>>()
 
@@ -137,9 +141,15 @@ export class BeldexWeb3 {
       this.cachedAddress = (data as AccountsChangedEventData | undefined)?.address ?? null
     })
     provider.on('disconnect', () => { this.cachedAddress = null })
+    provider.on('networkChanged', data => {
+      const n = (data as { nettype?: unknown } | undefined)?.nettype
+      if (n === 'mainnet' || n === 'testnet') this.cachedNetwork = n
+    })
     provider.on('connect', data => {
       const d = data as ConnectEventData | undefined
       if (d && typeof d.address === 'string') this.cachedAddress = d.address
+      const n = (d as { network?: unknown } | undefined)?.network
+      if (n === 'mainnet' || n === 'testnet') this.cachedNetwork = n
     })
   }
 
@@ -191,6 +201,7 @@ export class BeldexWeb3 {
   async connect(): Promise<ConnectResult> {
     const r = await this.request<ConnectResult>('bdx_connect')
     this.cachedAddress = r.address
+    this.cachedNetwork = r.network
     return r
   }
 
@@ -276,6 +287,11 @@ export class BeldexWeb3 {
     return this.cachedAddress
   }
 
+  /** Network from the last connect()/networkChanged, without a round-trip. */
+  get network(): Nettype | null {
+    return this.cachedNetwork
+  }
+
   get isConnected(): boolean {
     return this.cachedAddress !== null
   }
@@ -298,12 +314,76 @@ export class BeldexWeb3 {
   }
 
   /**
+   * HF22 privacy-token balance for the connected wallet (grant required;
+   * wallet v1.3+ on an HF22 chain — testnet today). Amounts are BigInt in the
+   * TOKEN's atomic units; `decimalPoint`/`ticker` present when the chain
+   * confirms the token.
+   */
+  async getTokenBalance(tokenId: string): Promise<TokenBalance> {
+    if (typeof tokenId !== 'string' || !TOKEN_ID_RE.test(tokenId)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'tokenId must be 1–64 chars of A-Za-z0-9')
+    }
+    const r = await this.request<GetTokenBalanceResult>('bdx_getTokenBalance', { tokenId })
+    return {
+      ...r,
+      total: parseAtomic(r.total),
+      unlocked: parseAtomic(r.unlocked),
+      locked: parseAtomic(r.locked)
+    }
+  }
+
+  /**
+   * Every HF22 token the connected wallet holds (like the wallet's own Tokens
+   * screen) — no token id needed. Optionally pass ids to ALSO ask about
+   * tokens not (yet) held, e.g. a just-registered one. Max 16 ids.
+   */
+  async getTokenBalances(tokenIds: string[] = []): Promise<TokenBalances> {
+    if (!Array.isArray(tokenIds) || tokenIds.length > 16) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'tokenIds must be an array of at most 16 ids')
+    }
+    for (const id of tokenIds) {
+      if (typeof id !== 'string' || !TOKEN_ID_RE.test(id)) {
+        throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'each tokenId must be 1–64 chars of A-Za-z0-9')
+      }
+    }
+    // Structural rules keep wire params primitive — ids travel comma-joined
+    // (the id charset cannot contain a comma, so the join is unambiguous).
+    const r = tokenIds.length > 0
+      ? await this.request<GetTokenBalancesResult>('bdx_getTokenBalances', { tokenIds: tokenIds.join(',') })
+      : await this.request<GetTokenBalancesResult>('bdx_getTokenBalances')
+    return {
+      height: r.height,
+      tokens: r.tokens.map(t => ({
+        ...t,
+        total: parseAtomic(t.total),
+        unlocked: parseAtomic(t.unlocked),
+        locked: parseAtomic(t.locked)
+      }))
+    }
+  }
+
+  /** Public descriptor of an HF22 token (ticker, decimals, supply, owner).
+   *  Use `decimalPoint` with toTokenAtomic()/fromTokenAtomic() for amounts. */
+  async getTokenInfo(tokenId: string): Promise<TokenInfo> {
+    if (typeof tokenId !== 'string' || !TOKEN_ID_RE.test(tokenId)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'tokenId must be 1–64 chars of A-Za-z0-9')
+    }
+    return this.request<TokenInfo>('bdx_getTokenInfo', { tokenId })
+  }
+
+  /**
    * Ask the wallet to send BDX. The user approves (or rejects — error 4001)
    * in the wallet's own window. `amount` is atomic units: bigint, or an
    * integer string; use toAtomic('1.25') to convert display BDX.
    */
   async sendTransaction(params: SendTransactionParams): Promise<SendTransactionResult> {
-    const { to, amount, priority, paymentId, sweep } = params
+    const { to, amount, priority, paymentId, sweep, tokenId } = params
+    if (tokenId !== undefined && !TOKEN_ID_RE.test(tokenId)) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'tokenId must be 1–64 chars of A-Za-z0-9')
+    }
+    if (tokenId !== undefined && sweep) {
+      throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'sweep is not supported for token sends')
+    }
     let idempotencyKey = params.idempotencyKey
     if (idempotencyKey !== undefined && !IDEMPOTENCY_KEY_RE.test(idempotencyKey)) {
       throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, 'idempotencyKey must be 8–128 chars of A-Za-z0-9._-')
@@ -312,7 +392,9 @@ export class BeldexWeb3 {
     // never create a second approved payment. Older wallets ignore the field.
     idempotencyKey ??= randomNonceHex()
 
-    const addr = checkAddress(to)
+    // Cross-network sends can't succeed: with the wallet's network known,
+    // reject a wrong-chain address before it reaches the approval flow.
+    const addr = checkAddress(to, this.cachedNetwork ?? undefined)
     if (!addr.valid) {
       throw new BdxRpcError(ERROR_CODES.INVALID_PARAMS, `invalid "to" address: ${addr.reason}`)
     }
@@ -346,6 +428,7 @@ export class BeldexWeb3 {
       ...(priority !== undefined ? { priority } : {}),
       ...(paymentId !== undefined ? { paymentId } : {}),
       ...(sweep ? { sweep: true } : {}),
+      ...(tokenId !== undefined ? { tokenId } : {}),
       idempotencyKey
     })
   }
@@ -450,7 +533,9 @@ export class BeldexWeb3 {
   }
 
   async getNetwork(): Promise<GetNetworkResult> {
-    return this.request<GetNetworkResult>('bdx_getNetwork')
+    const r = await this.request<GetNetworkResult>('bdx_getNetwork')
+    this.cachedNetwork = r.nettype
+    return r
   }
 
   async getState(): Promise<WalletState> {

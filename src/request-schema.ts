@@ -58,7 +58,20 @@ export const REQUEST_SCHEMAS: Readonly<Record<BdxMethod, MethodSchema>> = {
     sweep: { type: 'boolean' },
     priority: { type: 'number' },
     paymentId: { type: 'string', maxLen: 64 },
-    idempotencyKey: { type: 'string', maxLen: 128 }
+    idempotencyKey: { type: 'string', maxLen: 128 },
+    tokenId: { type: 'string', maxLen: 64 }
+  },
+  bdx_getTokenBalance: {
+    tokenId: { type: 'string', maxLen: 64, required: true }
+  },
+  bdx_getTokenBalances: {
+    // Optional filter: COMMA-SEPARATED token ids (params are primitives-only
+    // by the structural rules, so no arrays on the wire). <=16 ids of <=64
+    // alnum chars each; absent = all tokens the account holds.
+    tokenIds: { type: 'string', maxLen: 1040 }
+  },
+  bdx_getTokenInfo: {
+    tokenId: { type: 'string', maxLen: 64, required: true }
   },
   bdx_getOperationStatus: {
     operationId: { type: 'string', maxLen: 128, required: true }
